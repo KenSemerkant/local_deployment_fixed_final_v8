@@ -190,7 +190,7 @@ const Dashboard: React.FC = () => {
         ) : (
           <Grid container spacing={3}>
             {documents.map((doc) => (
-              <Grid item xs={12} sm={6} md={4} key={doc.document_id}>
+              <Grid item xs={12} sm={6} md={4} key={doc.id}>
                 <Card elevation={2}>
                   <CardContent>
                     <Typography variant="h6" noWrap title={doc.filename}>
@@ -213,7 +213,7 @@ const Dashboard: React.FC = () => {
                     <Tooltip title="View Document">
                       <IconButton 
                         color="primary" 
-                        onClick={() => handleViewDocument(doc.document_id)}
+                        onClick={() => handleViewDocument(doc.id.toString())}
                         disabled={doc.status.toUpperCase() === 'UPLOADING'}
                       >
                         <VisibilityIcon />
@@ -222,7 +222,7 @@ const Dashboard: React.FC = () => {
                     <Tooltip title="Delete Document">
                       <IconButton 
                         color="error" 
-                        onClick={() => handleDeleteClick(doc.document_id)}
+                        onClick={() => handleDeleteClick(doc.id.toString())}
                       >
                         <DeleteIcon />
                       </IconButton>
