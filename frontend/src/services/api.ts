@@ -75,8 +75,11 @@ export interface SourceReference {
 }
 
 export interface QuestionResponse {
-  answer: string;
+  id: number;
+  question_text: string;
+  answer_text: string;
   sources: SourceReference[];
+  created_at: string;
 }
 
 // API functions
@@ -164,7 +167,7 @@ export const documentService = {
   askQuestion: async (documentId: string, question: string): Promise<QuestionResponse> => {
     console.log(`Asking question about document ${documentId}: "${question}"`);
     try {
-      const response = await api.post(`/documents/${documentId}/question`, { question });
+      const response = await api.post(`/documents/${documentId}/ask`, { question });
       console.log('Question response:', response.data);
       return response.data;
     } catch (error) {

@@ -351,7 +351,7 @@ const DocumentView: React.FC = () => {
                       Answer
                     </Typography>
                     <Typography variant="body1" sx={{ mb: 2, whiteSpace: 'pre-line' }}>
-                      {questionResponse.answer}
+                      {questionResponse.answer_text}
                     </Typography>
                     
                     {questionResponse.sources && questionResponse.sources.length > 0 && (
