@@ -43,9 +43,9 @@ api.interceptors.response.use(
 
 // Document types
 export interface Document {
-  document_id: string;
+  id: number;
   filename: string;
-  file_type: string;
+  mime_type: string;
   file_size: number;
   status: string;
   created_at: string;
@@ -101,7 +101,27 @@ export const documentService = {
     try {
       const response = await api.get(`/documents/${documentId}`);
       console.log('Document response data:', response.data);
-      return response.data;
+
+      // If document is completed, also fetch analysis results
+      const document = response.data;
+      if (document.status === 'COMPLETED') {
+        try {
+          const analysisResponse = await api.get(`/documents/${documentId}/analysis`);
+          console.log('Analysis response data:', analysisResponse.data);
+
+          // Combine document and analysis data
+          document.analysis_results = {
+            summary: analysisResponse.data.summary,
+            key_figures: JSON.stringify(analysisResponse.data.key_figures),
+            vector_db_path: analysisResponse.data.vector_db_path
+          };
+        } catch (analysisError) {
+          console.warn(`Could not fetch analysis for document ${documentId}:`, analysisError);
+          // Don't throw error here, just continue without analysis results
+        }
+      }
+
+      return document;
     } catch (error) {
       console.error(`Error fetching document ${documentId}:`, error);
       throw error;
@@ -109,7 +129,7 @@ export const documentService = {
   },
 
   // Upload document
-  uploadDocument: async (file: File): Promise<{ document_id: string; status: string }> => {
+  uploadDocument: async (file: File): Promise<Document> => {
     console.log(`Uploading document: ${file.name}`);
     const formData = new FormData();
     formData.append('file', file);
