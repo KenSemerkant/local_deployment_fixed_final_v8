@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Interface Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 800px;
+            height: 600px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .chat-header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .chat-header p {
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f8f9fa;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 20px;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message.assistant {
+            justify-content: flex-start;
+        }
+
+        .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .avatar.user {
+            background: #ff6b6b;
+        }
+
+        .avatar.assistant {
+            background: #667eea;
+        }
+
+        .message-bubble {
+            max-width: 75%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            position: relative;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-bubble {
+            background: #667eea;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .message-bubble {
+            background: white;
+            color: #333;
+            border: 1px solid #e0e0e0;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-time {
+            font-size: 0.75rem;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .sources {
+            margin-top: 10px;
+        }
+
+        .sources-chip {
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .sources-list {
+            background: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-top: 8px;
+            padding: 10px;
+            font-size: 0.85rem;
+            font-style: italic;
+            color: #666;
+        }
+
+        .chat-input {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .input-field {
+            flex: 1;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            padding: 12px 16px;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            font-family: inherit;
+            max-height: 100px;
+        }
+
+        .input-field:focus {
+            border-color: #667eea;
+        }
+
+        .send-button {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: background 0.2s;
+        }
+
+        .send-button:hover {
+            background: #5a6fd8;
+        }
+
+        .send-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            text-align: center;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #999;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>Chat with Financial_Report_Q3_2023.pdf</h1>
+            <p>Ask questions about this document and get intelligent answers</p>
+        </div>
+        
+        <div class="chat-messages" id="messages">
+            <!-- Sample conversation -->
+            <div class="message user">
+                <div class="message-bubble">
+                    What was the total revenue for Q3 2023?
+                    <div class="message-time">2:34 PM</div>
+                </div>
+                <div class="avatar user">👤</div>
+            </div>
+            
+            <div class="message assistant">
+                <div class="avatar assistant">🤖</div>
+                <div class="message-bubble">
+                    According to the financial report, the total revenue for Q3 2023 was $2.4 billion, representing a 15% increase compared to Q3 2022. This growth was primarily driven by strong performance in the cloud services division and increased subscription revenue.
+                    <div class="sources">
+                        <div class="sources-chip" onclick="toggleSources(this)">
+                            📄 2 sources ▼
+                        </div>
+                        <div class="sources-list" style="display: none;">
+                            "Total revenue reached $2.4 billion in Q3 2023..." - Page 3<br>
+                            "Year-over-year growth of 15% demonstrates..." - Page 5
+                        </div>
+                    </div>
+                    <div class="message-time">2:34 PM</div>
+                </div>
+            </div>
+            
+            <div class="message user">
+                <div class="message-bubble">
+                    How does this compare to our competitors?
+                    <div class="message-time">2:35 PM</div>
+                </div>
+                <div class="avatar user">👤</div>
+            </div>
+            
+            <div class="message assistant">
+                <div class="avatar assistant">🤖</div>
+                <div class="message-bubble">
+                    <div class="typing-indicator">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <span style="margin-left: 8px; color: #999;">Thinking...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chat-input">
+            <textarea 
+                class="input-field" 
+                placeholder="Ask a question about this document..."
+                rows="1"
+                onkeypress="handleKeyPress(event)"
+            ></textarea>
+            <button class="send-button" onclick="sendMessage()">
+                ➤
+            </button>
+        </div>
+    </div>
+
+    <script>
+        function toggleSources(element) {
+            const sourcesList = element.nextElementSibling;
+            const isVisible = sourcesList.style.display !== 'none';
+            sourcesList.style.display = isVisible ? 'none' : 'block';
+            element.innerHTML = isVisible ? '📄 2 sources ▼' : '📄 2 sources ▲';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function sendMessage() {
+            const input = document.querySelector('.input-field');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message
+            addMessage('user', message);
+            input.value = '';
+
+            // Simulate AI response after a delay
+            setTimeout(() => {
+                addMessage('assistant', 'This is a demo interface. In the actual application, this would connect to your document analysis API and provide intelligent responses based on the document content.');
+            }, 1500);
+        }
+
+        function addMessage(type, content) {
+            const messagesContainer = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            if (type === 'user') {
+                messageDiv.innerHTML = `
+                    <div class="message-bubble">
+                        ${content}
+                        <div class="message-time">${time}</div>
+                    </div>
+                    <div class="avatar user">👤</div>
+                `;
+            } else {
+                messageDiv.innerHTML = `
+                    <div class="avatar assistant">🤖</div>
+                    <div class="message-bubble">
+                        ${content}
+                        <div class="message-time">${time}</div>
+                    </div>
+                `;
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Auto-resize textarea
+        document.querySelector('.input-field').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+        });
+    </script>
+</body>
+</html>

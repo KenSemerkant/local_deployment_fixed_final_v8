@@ -1,20 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { 
-  Container, 
-  Box, 
-  Typography, 
-  Paper, 
+import {
+  Container,
+  Box,
+  Typography,
+  Paper,
   Grid,
   Card,
   CardContent,
-  Divider,
   CircularProgress,
   Button,
-  TextField,
-  List,
-  ListItem,
-  ListItemText,
   Tabs,
   Tab,
   IconButton,
@@ -24,13 +19,12 @@ import {
   Menu,
   MenuItem
 } from '@mui/material';
-import { 
+import {
   ArrowBack as ArrowBackIcon,
-  Download as DownloadIcon,
-  Send as SendIcon,
-  MoreVert as MoreVertIcon
+  Download as DownloadIcon
 } from '@mui/icons-material';
-import { documentService, Document, KeyFigure, QuestionResponse } from '../services/api';
+import { documentService, Document, KeyFigure } from '../services/api';
+import ChatInterface from '../components/ChatInterface';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -66,9 +60,6 @@ const DocumentView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tabValue, setTabValue] = useState(0);
-  const [question, setQuestion] = useState('');
-  const [questionResponse, setQuestionResponse] = useState<QuestionResponse | null>(null);
-  const [askingQuestion, setAskingQuestion] = useState(false);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
 
   useEffect(() => {
@@ -94,22 +85,6 @@ const DocumentView: React.FC = () => {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
-  };
-
-  const handleQuestionSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!question.trim() || !documentId) return;
-    
-    setAskingQuestion(true);
-    try {
-      const response = await documentService.askQuestion(documentId, question);
-      setQuestionResponse(response);
-    } catch (err: any) {
-      console.error('Error asking question:', err);
-      setError('Failed to get answer. Please try again.');
-    } finally {
-      setAskingQuestion(false);
-    }
   };
 
   const handleExportClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -256,7 +231,7 @@ const DocumentView: React.FC = () => {
               >
                 <Tab label="Summary" />
                 <Tab label="Key Figures" />
-                <Tab label="Q&A" />
+                <Tab label="Chat" />
               </Tabs>
 
               <TabPanel value={tabValue} index={0}>
@@ -316,64 +291,10 @@ const DocumentView: React.FC = () => {
               </TabPanel>
 
               <TabPanel value={tabValue} index={2}>
-                <Typography variant="h6" gutterBottom>
-                  Ask Questions About This Document
-                </Typography>
-                <Box component="form" onSubmit={handleQuestionSubmit} sx={{ mb: 3 }}>
-                  <TextField
-                    fullWidth
-                    label="Ask a question about this document"
-                    variant="outlined"
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    disabled={askingQuestion}
-                    sx={{ mb: 2 }}
-                  />
-                  <Button
-                    type="submit"
-                    variant="contained"
-                    endIcon={<SendIcon />}
-                    disabled={!question.trim() || askingQuestion}
-                  >
-                    {askingQuestion ? 'Processing...' : 'Ask Question'}
-                  </Button>
-                </Box>
-
-                {askingQuestion && (
-                  <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
-                    <CircularProgress />
-                  </Box>
-                )}
-
-                {questionResponse && (
-                  <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-                    <Typography variant="h6" gutterBottom>
-                      Answer
-                    </Typography>
-                    <Typography variant="body1" sx={{ mb: 2, whiteSpace: 'pre-line' }}>
-                      {questionResponse.answer_text}
-                    </Typography>
-                    
-                    {questionResponse.sources && questionResponse.sources.length > 0 && (
-                      <>
-                        <Divider sx={{ my: 2 }} />
-                        <Typography variant="subtitle2" gutterBottom>
-                          Sources
-                        </Typography>
-                        <List dense>
-                          {questionResponse.sources.map((source, index) => (
-                            <ListItem key={index}>
-                              <ListItemText
-                                primary={source.snippet}
-                                secondary={source.page ? `Page ${source.page}` : undefined}
-                              />
-                            </ListItem>
-                          ))}
-                        </List>
-                      </>
-                    )}
-                  </Paper>
-                )}
+                <ChatInterface
+                  documentId={documentId!}
+                  documentName={document.filename}
+                />
               </TabPanel>
             </Paper>
           </>

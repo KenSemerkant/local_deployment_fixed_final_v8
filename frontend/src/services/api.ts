@@ -176,6 +176,19 @@ export const documentService = {
     }
   },
 
+  // Get conversation history for document
+  getConversationHistory: async (documentId: string): Promise<QuestionResponse[]> => {
+    console.log(`Fetching conversation history for document ${documentId}`);
+    try {
+      const response = await api.get(`/documents/${documentId}/questions`);
+      console.log('Conversation history response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching conversation history for document ${documentId}:`, error);
+      throw error;
+    }
+  },
+
   // Export document analysis
   exportDocument: async (documentId: string, format: 'txt' | 'csv' = 'csv'): Promise<{ export_url: string; expires_at: string }> => {
     console.log(`Exporting document ${documentId} as ${format}`);
