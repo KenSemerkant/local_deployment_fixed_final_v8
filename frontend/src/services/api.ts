@@ -213,6 +213,37 @@ export const documentService = {
       throw error;
     }
   },
+
+  // Cancel document processing
+  cancelProcessing: async (documentId: string): Promise<{ message: string }> => {
+    console.log(`Cancelling processing for document ${documentId}`);
+    try {
+      const response = await api.post(`/documents/${documentId}/cancel`);
+      console.log(`Document ${documentId} processing cancelled:`, response.data);
+      return response.data;
+    } catch (error) {
+      console.error(`Error cancelling processing for document ${documentId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get document processing status
+  getProcessingStatus: async (documentId: string): Promise<{
+    document_id: number;
+    status: string;
+    is_processing: boolean;
+    can_cancel: boolean;
+  }> => {
+    console.log(`Getting processing status for document ${documentId}`);
+    try {
+      const response = await api.get(`/documents/${documentId}/status`);
+      console.log(`Document ${documentId} processing status:`, response.data);
+      return response.data;
+    } catch (error) {
+      console.error(`Error getting processing status for document ${documentId}:`, error);
+      throw error;
+    }
+  },
 };
 
 export default api;

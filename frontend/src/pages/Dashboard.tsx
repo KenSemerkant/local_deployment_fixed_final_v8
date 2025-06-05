@@ -21,11 +21,12 @@ import {
   Alert,
   Tooltip
 } from '@mui/material';
-import { 
-  Add as AddIcon, 
+import {
+  Add as AddIcon,
   Delete as DeleteIcon,
   Visibility as VisibilityIcon,
-  CloudUpload as CloudUploadIcon
+  CloudUpload as CloudUploadIcon,
+  Cancel as CancelIcon
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { documentService, Document } from '../services/api';
@@ -39,6 +40,7 @@ const Dashboard: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
+  const [cancellingDocuments, setCancellingDocuments] = useState<Set<string>>(new Set());
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -127,6 +129,23 @@ const Dashboard: React.FC = () => {
     navigate(`/documents/${documentId}`);
   };
 
+  const handleCancelProcessing = async (documentId: string) => {
+    setCancellingDocuments(prev => new Set(prev).add(documentId));
+    try {
+      await documentService.cancelProcessing(documentId);
+      fetchDocuments(); // Refresh to show updated status
+    } catch (err: any) {
+      console.error('Error cancelling document processing:', err);
+      setError('Failed to cancel document processing. Please try again.');
+    } finally {
+      setCancellingDocuments(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(documentId);
+        return newSet;
+      });
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status.toUpperCase()) {
       case 'COMPLETED':
@@ -137,6 +156,8 @@ const Dashboard: React.FC = () => {
         return 'info.main';
       case 'ERROR':
         return 'error.main';
+      case 'CANCELLED':
+        return 'warning.main';
       default:
         return 'text.secondary';
     }
@@ -211,17 +232,32 @@ const Dashboard: React.FC = () => {
                   <Divider />
                   <CardActions>
                     <Tooltip title="View Document">
-                      <IconButton 
-                        color="primary" 
+                      <IconButton
+                        color="primary"
                         onClick={() => handleViewDocument(doc.id.toString())}
                         disabled={doc.status.toUpperCase() === 'UPLOADING'}
                       >
                         <VisibilityIcon />
                       </IconButton>
                     </Tooltip>
+                    {doc.status.toUpperCase() === 'PROCESSING' && (
+                      <Tooltip title="Cancel Processing">
+                        <IconButton
+                          color="warning"
+                          onClick={() => handleCancelProcessing(doc.id.toString())}
+                          disabled={cancellingDocuments.has(doc.id.toString())}
+                        >
+                          {cancellingDocuments.has(doc.id.toString()) ? (
+                            <CircularProgress size={20} />
+                          ) : (
+                            <CancelIcon />
+                          )}
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     <Tooltip title="Delete Document">
-                      <IconButton 
-                        color="error" 
+                      <IconButton
+                        color="error"
                         onClick={() => handleDeleteClick(doc.id.toString())}
                       >
                         <DeleteIcon />

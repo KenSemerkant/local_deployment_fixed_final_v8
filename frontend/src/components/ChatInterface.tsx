@@ -25,6 +25,7 @@ import {
   Source as SourceIcon
 } from '@mui/icons-material';
 import { documentService, SourceReference } from '../services/api';
+import MarkdownRenderer from './MarkdownRenderer';
 
 // Utility function to format timestamps
 const formatTimestamp = (timestamp: string) => {
@@ -382,15 +383,19 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               <Typography variant="body2">Thinking...</Typography>
             </Box>
           ) : (
-            <Typography 
-              variant="body1" 
-              sx={{ 
-                whiteSpace: 'pre-wrap',
-                lineHeight: 1.5
-              }}
-            >
-              {message.content}
-            </Typography>
+            isUser ? (
+              <Typography
+                variant="body1"
+                sx={{
+                  whiteSpace: 'pre-wrap',
+                  lineHeight: 1.5
+                }}
+              >
+                {message.content}
+              </Typography>
+            ) : (
+              <MarkdownRenderer content={message.content} variant="body1" />
+            )
           )}
         </Paper>
 

@@ -24,7 +24,7 @@ class Document(Base):
     file_path = Column(String)
     file_size = Column(Integer)
     mime_type = Column(String)
-    status = Column(String, default="UPLOADED")  # UPLOADED, PROCESSING, COMPLETED, ERROR
+    status = Column(String, default="UPLOADED")  # UPLOADED, PROCESSING, COMPLETED, ERROR, CANCELLED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     owner_id = Column(Integer, ForeignKey("users.id"))

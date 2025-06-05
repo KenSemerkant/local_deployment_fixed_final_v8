@@ -10,8 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py .
-COPY llm_integration.py .
+COPY *.py .
 
 # Create all required data directories with proper permissions
 RUN mkdir -p /data/temp /data/vector_db /data/cache /data/db && \

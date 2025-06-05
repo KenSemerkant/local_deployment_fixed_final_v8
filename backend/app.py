@@ -31,9 +31,10 @@ from utils import (
     get_analysis_result, create_qa_session, create_question,
     delete_document_and_related_data
 )
-from background_tasks import process_document_task
+from background_tasks import process_document_task, task_manager
 from llm_integration import (
-    ask_question, get_llm_status, set_llm_mode, get_available_llm_modes
+    ask_question, get_llm_status, set_llm_mode, get_available_llm_modes,
+    clear_document_cache, clear_all_cache
 )
 
 # Configure logging
@@ -141,11 +142,16 @@ def delete_document(document_id: int, current_user: User = Depends(get_current_u
     document = get_document_by_id(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
+    # Cancel any running processing task for this document
+    if task_manager.is_task_running(document_id):
+        task_manager.cancel_task(document_id)
+        logger.info(f"Cancelled processing task for document {document_id} before deletion")
+
     success = delete_document_and_related_data(db, document_id)
     if not success:
         raise HTTPException(status_code=500, detail="Error deleting document")
-    
+
     return {"message": "Document deleted successfully"}
 
 @app.get("/documents/{document_id}/download")
@@ -332,6 +338,62 @@ def set_llm_mode_endpoint(request: LLMModeRequest, current_user: User = Depends(
 @app.get("/llm/modes", response_model=List[str])
 def get_available_llm_modes_endpoint(current_user: User = Depends(get_current_user)):
     return get_available_llm_modes()
+
+@app.post("/documents/{document_id}/cancel")
+def cancel_document_processing(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Cancel processing of a document."""
+    document = get_document_by_id(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if task_manager.is_task_running(document_id):
+        success = task_manager.cancel_task(document_id)
+        if success:
+            # Update document status to CANCELLED
+            document.status = "CANCELLED"
+            db.commit()
+            return {"message": f"Processing cancelled for document {document_id}"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to cancel processing")
+    else:
+        return {"message": f"No active processing found for document {document_id}"}
+
+@app.get("/documents/{document_id}/status")
+def get_document_processing_status(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get processing status of a document."""
+    document = get_document_by_id(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    is_processing = task_manager.is_task_running(document_id)
+    return {
+        "document_id": document_id,
+        "status": document.status,
+        "is_processing": is_processing,
+        "can_cancel": is_processing and document.status == "PROCESSING"
+    }
+
+@app.post("/documents/{document_id}/clear-cache")
+def clear_document_cache_endpoint(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Clear cache for a specific document to force reprocessing."""
+    document = get_document_by_id(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    success = clear_document_cache(str(document_id))
+    if success:
+        return {"message": f"Cache cleared for document {document_id}"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to clear cache")
+
+@app.post("/admin/clear-all-cache")
+def clear_all_cache_endpoint(current_user: User = Depends(get_current_user)):
+    """Clear all cache data (admin function)."""
+    success = clear_all_cache()
+    if success:
+        return {"message": "All cache cleared successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to clear all cache")
 
 @app.get("/health")
 def health_check():

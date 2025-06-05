@@ -315,10 +315,17 @@ def get_document_type(file_path: str) -> str:
     else:
         return "annual_report"  # Default to annual report
 
-def process_document_mock(file_path: str) -> Dict[str, Any]:
-    """Process document using mock data."""
-    # Simulate processing delay
-    time.sleep(MOCK_DELAY)
+def process_document_mock(file_path: str, cancel_event=None) -> Dict[str, Any]:
+    """Process document using mock data with cancellation support."""
+    # Simulate processing delay with cancellation checks
+    delay_chunks = 10  # Split delay into chunks for cancellation checks
+    chunk_delay = MOCK_DELAY / delay_chunks
+
+    for i in range(delay_chunks):
+        if cancel_event and cancel_event.is_set():
+            logger.info("Mock processing cancelled")
+            return {"error": "Processing cancelled"}
+        time.sleep(chunk_delay)
     
     # Determine document type
     doc_type = get_document_type(file_path)
@@ -342,17 +349,27 @@ def process_document_mock(file_path: str) -> Dict[str, Any]:
         "vector_db_path": vector_db_path
     }
 
-def process_document_ollama(file_path: str) -> Dict[str, Any]:
-    """Process document using Ollama."""
+def process_document_ollama(file_path: str, cancel_event=None) -> Dict[str, Any]:
+    """Process document using Ollama with cancellation support."""
     logger.info(f"Processing document with Ollama: {file_path}")
     logger.info(f"Using Ollama model: {OLLAMA_MODEL}")
     logger.info(f"Using Ollama max tokens: {OLLAMA_MAX_TOKENS}")
-    
+
     try:
+        # Check for cancellation before text extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama processing cancelled before text extraction")
+            return {"error": "Processing cancelled"}
+
         # Extract text from document
         text = extract_text_from_document(file_path)
         if not text:
             return {"error": "Failed to extract text from document"}
+
+        # Check for cancellation after text extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama processing cancelled after text extraction")
+            return {"error": "Processing cancelled"}
         
         # Create chunks
         text_splitter = RecursiveCharacterTextSplitter(
@@ -423,16 +440,26 @@ def process_document_ollama(file_path: str) -> Dict[str, Any]:
         logger.error(f"Error processing document with Ollama: {e}")
         return {"error": str(e)}
 
-def process_document_openai(file_path: str) -> Dict[str, Any]:
-    """Process document using OpenAI."""
+def process_document_openai(file_path: str, cancel_event=None) -> Dict[str, Any]:
+    """Process document using OpenAI with cancellation support."""
     if not OPENAI_API_KEY:
         return {"error": "OpenAI API key not provided"}
-    
+
     try:
+        # Check for cancellation before text extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI processing cancelled before text extraction")
+            return {"error": "Processing cancelled"}
+
         # Extract text from document
         text = extract_text_from_document(file_path)
         if not text:
             return {"error": "Failed to extract text from document"}
+
+        # Check for cancellation after text extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI processing cancelled after text extraction")
+            return {"error": "Processing cancelled"}
         
         # Create chunks
         text_splitter = RecursiveCharacterTextSplitter(
@@ -506,23 +533,49 @@ def process_document_openai(file_path: str) -> Dict[str, Any]:
 def extract_text_from_document(file_path: str) -> str:
     """Extract text from document file."""
     try:
-        # For demo purposes, just read the file if it's a text file
+        # For text files, read directly
         if file_path.endswith((".txt", ".md")):
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 return f.read()
-        
-        # For PDF files, use a simple extraction method
+
+        # For PDF files, use PyMuPDF (fitz) for text extraction
         elif file_path.endswith(".pdf"):
-            # In a real implementation, use a PDF extraction library
-            # For demo, return a placeholder
-            return "This is placeholder text extracted from a PDF file."
-        
+            import fitz  # PyMuPDF
+
+            logger.info(f"Extracting text from PDF: {file_path}")
+            text_content = []
+
+            # Open the PDF document
+            doc = fitz.open(file_path)
+
+            # Extract text from each page
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                text = page.get_text()
+
+                if text.strip():  # Only add non-empty pages
+                    # Add page marker for better context
+                    text_content.append(f"--- Page {page_num + 1} ---\n{text}")
+
+            doc.close()
+
+            # Combine all pages
+            full_text = "\n\n".join(text_content)
+
+            if not full_text.strip():
+                logger.warning(f"No text extracted from PDF: {file_path}")
+                return "No readable text found in this PDF document."
+
+            logger.info(f"Successfully extracted {len(full_text)} characters from PDF")
+            return full_text
+
         # For other file types, return a placeholder
         else:
-            return "This is placeholder text for an unsupported file type."
+            logger.warning(f"Unsupported file type: {file_path}")
+            return "This file type is not supported for text extraction."
     except Exception as e:
-        logger.error(f"Error extracting text from document: {e}")
-        return ""
+        logger.error(f"Error extracting text from document {file_path}: {e}")
+        return f"Error extracting text: {str(e)}"
 
 def call_ollama_api(prompt: str) -> str:
     """Call Ollama API with prompt."""
@@ -664,11 +717,16 @@ def extract_key_figures_from_response(response: str) -> List[Dict[str, Any]]:
             {"name": "Total Assets", "value": "Error extracting", "source_page": None}
         ]
 
-def process_document(file_path: str) -> Dict[str, Any]:
-    """Process document using selected LLM backend."""
+def process_document(file_path: str, cancel_event=None) -> Dict[str, Any]:
+    """Process document using selected LLM backend with cancellation support."""
+    # Check for cancellation at the start
+    if cancel_event and cancel_event.is_set():
+        logger.info("Document processing cancelled at start")
+        return {"error": "Processing cancelled"}
+
     # Get document ID from path
     document_id = os.path.basename(os.path.dirname(file_path))
-    
+
     # Check if document already processed
     if check_document_processed(document_id, file_path):
         logger.info(f"Loading document {document_id} from cache")
@@ -678,27 +736,37 @@ def process_document(file_path: str) -> Dict[str, Any]:
             "vector_db_path": load_from_cache(document_id, "vector_db_path")
         }
     
+    # Check for cancellation before processing
+    if cancel_event and cancel_event.is_set():
+        logger.info("Document processing cancelled before LLM processing")
+        return {"error": "Processing cancelled"}
+
     # Process document based on LLM mode
     result = {}
     if LLM_MODE == "mock":
-        result = process_document_mock(file_path)
+        result = process_document_mock(file_path, cancel_event)
     elif LLM_MODE == "ollama":
-        result = process_document_ollama(file_path)
+        result = process_document_ollama(file_path, cancel_event)
     elif LLM_MODE == "openai":
-        result = process_document_openai(file_path)
+        result = process_document_openai(file_path, cancel_event)
     else:
         result = {"error": f"Unknown LLM mode: {LLM_MODE}"}
-    
+
+    # Check for cancellation after processing
+    if cancel_event and cancel_event.is_set():
+        logger.info("Document processing cancelled after LLM processing")
+        return {"error": "Processing cancelled"}
+
     # Cache results if successful
     if "error" not in result:
         # Save MD5 hash
         save_to_cache(document_id, "md5", get_file_md5(file_path))
-        
+
         # Save results
         save_to_cache(document_id, "summary", result.get("summary"))
         save_to_cache(document_id, "key_figures", result.get("key_figures"))
         save_to_cache(document_id, "vector_db_path", result.get("vector_db_path"))
-    
+
     return result
 
 def ask_question(vector_db_path: str, question: str) -> Dict[str, Any]:
@@ -971,3 +1039,36 @@ def get_current_llm_mode() -> str:
 def get_available_llm_modes() -> List[str]:
     """Get available LLM modes."""
     return ["mock", "ollama", "openai"]
+
+def clear_document_cache(document_id: str) -> bool:
+    """Clear cache for a specific document."""
+    try:
+        cache_operations = ["md5", "summary", "key_figures", "vector_db_path"]
+        cleared_count = 0
+
+        for operation in cache_operations:
+            cache_path = get_cache_path(document_id, operation)
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
+                cleared_count += 1
+                logger.info(f"Cleared cache for document {document_id}, operation: {operation}")
+
+        logger.info(f"Cleared {cleared_count} cache files for document {document_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error clearing cache for document {document_id}: {e}")
+        return False
+
+def clear_all_cache() -> bool:
+    """Clear all cached data."""
+    try:
+        if os.path.exists(CACHE_PATH):
+            import shutil
+            shutil.rmtree(CACHE_PATH)
+            os.makedirs(CACHE_PATH, exist_ok=True)
+            logger.info("Cleared all cache data")
+            return True
+        return True
+    except Exception as e:
+        logger.error(f"Error clearing all cache: {e}")
+        return False

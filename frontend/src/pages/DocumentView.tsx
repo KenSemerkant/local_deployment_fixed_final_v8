@@ -21,10 +21,12 @@ import {
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  Cancel as CancelIcon
 } from '@mui/icons-material';
 import { documentService, Document, KeyFigure } from '../services/api';
 import ChatInterface from '../components/ChatInterface';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -61,6 +63,7 @@ const DocumentView: React.FC = () => {
   const [error, setError] = useState('');
   const [tabValue, setTabValue] = useState(0);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (documentId) {
@@ -93,6 +96,22 @@ const DocumentView: React.FC = () => {
 
   const handleExportClose = () => {
     setExportMenuAnchor(null);
+  };
+
+  const handleCancelProcessing = async () => {
+    if (!document) return;
+
+    setCancelling(true);
+    try {
+      await documentService.cancelProcessing(document.id.toString());
+      // Refresh document to show updated status
+      fetchDocument(document.id.toString());
+    } catch (err: any) {
+      console.error('Error cancelling document processing:', err);
+      setError('Failed to cancel document processing. Please try again.');
+    } finally {
+      setCancelling(false);
+    }
   };
 
   const handleExport = async (format: 'txt' | 'csv') => {
@@ -153,6 +172,7 @@ const DocumentView: React.FC = () => {
 
   const isProcessing = document.status === 'PROCESSING' || document.status === 'UPLOADING';
   const hasError = document.status === 'ERROR';
+  const isCancelled = document.status === 'CANCELLED';
 
   return (
     <Container maxWidth="lg">
@@ -168,8 +188,20 @@ const DocumentView: React.FC = () => {
               </Typography>
             </Box>
             <Box>
+              {isProcessing && (
+                <Tooltip title="Cancel Processing">
+                  <IconButton
+                    onClick={handleCancelProcessing}
+                    disabled={cancelling}
+                    color="warning"
+                    sx={{ mr: 1 }}
+                  >
+                    {cancelling ? <CircularProgress size={20} /> : <CancelIcon />}
+                  </IconButton>
+                </Tooltip>
+              )}
               <Tooltip title="Export Analysis">
-                <IconButton onClick={handleExportClick} disabled={isProcessing || hasError}>
+                <IconButton onClick={handleExportClick} disabled={isProcessing || hasError || isCancelled}>
                   <DownloadIcon />
                 </IconButton>
               </Tooltip>
@@ -187,11 +219,12 @@ const DocumentView: React.FC = () => {
             <Typography variant="body2" color="text.secondary" mr={2}>
               Uploaded: {new Date(document.created_at).toLocaleString()}
             </Typography>
-            <Chip 
-              label={document.status} 
+            <Chip
+              label={document.status}
               color={
-                document.status === 'COMPLETED' ? 'success' : 
-                document.status === 'ERROR' ? 'error' : 'info'
+                document.status === 'COMPLETED' ? 'success' :
+                document.status === 'ERROR' ? 'error' :
+                document.status === 'CANCELLED' ? 'warning' : 'info'
               }
               size="small"
             />
@@ -221,7 +254,18 @@ const DocumentView: React.FC = () => {
           </Alert>
         )}
 
-        {!isProcessing && !hasError && (
+        {isCancelled && (
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            <Typography variant="body1" fontWeight="bold">
+              Document processing cancelled
+            </Typography>
+            <Typography variant="body2">
+              The document processing was cancelled. You can upload the document again to restart processing.
+            </Typography>
+          </Alert>
+        )}
+
+        {!isProcessing && !hasError && !isCancelled && (
           <>
             <Paper elevation={1} sx={{ mb: 3 }}>
               <Tabs 
@@ -238,9 +282,9 @@ const DocumentView: React.FC = () => {
                 <Typography variant="h6" gutterBottom>
                   Document Summary
                 </Typography>
-                <Typography variant="body1" sx={{ whiteSpace: 'pre-line' }}>
-                  {document.analysis_results?.summary || 'No summary available.'}
-                </Typography>
+                <MarkdownRenderer
+                  content={document.analysis_results?.summary || 'No summary available.'}
+                />
               </TabPanel>
 
               <TabPanel value={tabValue} index={1}>
