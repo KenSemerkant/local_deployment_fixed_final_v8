@@ -64,11 +64,17 @@ const DocumentView: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (documentId) {
       fetchDocument(documentId);
     }
+
+    // Cleanup polling on unmount
+    return () => {
+      stopPolling();
+    };
   }, [documentId]);
 
   const fetchDocument = async (id: string) => {
@@ -78,11 +84,48 @@ const DocumentView: React.FC = () => {
       console.log("Document fetched:", doc);
       setDocument(doc);
       setError('');
+
+      // Start polling if document is processing
+      if (doc.status === 'PROCESSING' && !pollingInterval) {
+        startPolling(id);
+      } else if (doc.status !== 'PROCESSING' && pollingInterval) {
+        stopPolling();
+      }
     } catch (err: any) {
       console.error('Error fetching document:', err);
       setError('Failed to load document. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const startPolling = (id: string) => {
+    if (pollingInterval) return; // Already polling
+
+    console.log("Starting polling for document status updates");
+    const interval = setInterval(async () => {
+      try {
+        const doc = await documentService.getDocument(id);
+        setDocument(doc);
+
+        // Stop polling if document is no longer processing
+        if (doc.status !== 'PROCESSING') {
+          console.log("Document processing completed, stopping polling");
+          stopPolling();
+        }
+      } catch (err) {
+        console.error('Error polling document:', err);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    setPollingInterval(interval);
+  };
+
+  const stopPolling = () => {
+    if (pollingInterval) {
+      console.log("Stopping polling");
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
     }
   };
 

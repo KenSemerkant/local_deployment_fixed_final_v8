@@ -34,9 +34,10 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:27b")
 OLLAMA_USE_CPU = os.environ.get("OLLAMA_USE_CPU", "false").lower() == "true"
 OLLAMA_MAX_TOKENS = int(os.environ.get("OLLAMA_MAX_TOKENS", "8192"))  # Default to 8192 if not specified
 
-# OpenAI Configuration
+# OpenAI Configuration (also supports LM Studio)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "none")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")  # Default to OpenAI, can be set to LM Studio
 
 # Vector store and caching configuration
 STORAGE_PATH = os.environ.get("STORAGE_PATH", "/data")
@@ -408,25 +409,40 @@ def process_document_ollama(file_path: str, cancel_event=None) -> Dict[str, Any]
         4. Management's outlook
         """
         
-        summary = call_ollama_api(summary_prompt)
-        
+        # Check for cancellation before summary generation
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama processing cancelled before summary generation")
+            return {"error": "Processing cancelled"}
+
+        summary = call_ollama_api(summary_prompt, cancel_event)
+
+        # Check for cancellation after summary generation
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama processing cancelled after summary generation")
+            return {"error": "Processing cancelled"}
+
         # Extract key figures using Ollama
         key_figures_prompt = f"""
         {FINANCIAL_ANALYST_SYSTEM_PROMPT}
-        
+
         Please extract key financial figures from the following document:
-        
+
         {text[:50000]}  # Limit text to avoid token limits
-        
+
         For each key figure, provide:
         1. Name of the figure (e.g., "Annual Revenue", "Net Income", "Debt-to-Equity Ratio")
         2. Value (e.g., "$1.25 billion", "15%", "0.68")
         3. Source page number if available
-        
+
         Format your response as a JSON array of objects with "name", "value", and "source_page" fields.
         """
-        
-        key_figures_response = call_ollama_api(key_figures_prompt)
+
+        # Check for cancellation before key figures extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama processing cancelled before key figures extraction")
+            return {"error": "Processing cancelled"}
+
+        key_figures_response = call_ollama_api(key_figures_prompt, cancel_event)
         
         # Parse key figures from response
         key_figures = extract_key_figures_from_response(key_figures_response)
@@ -498,25 +514,40 @@ def process_document_openai(file_path: str, cancel_event=None) -> Dict[str, Any]
         4. Management's outlook
         """
         
-        summary = call_openai_api(summary_prompt)
-        
+        # Check for cancellation before summary generation
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI processing cancelled before summary generation")
+            return {"error": "Processing cancelled"}
+
+        summary = call_openai_api(summary_prompt, cancel_event)
+
+        # Check for cancellation after summary generation
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI processing cancelled after summary generation")
+            return {"error": "Processing cancelled"}
+
         # Extract key figures using OpenAI
         key_figures_prompt = f"""
         {FINANCIAL_ANALYST_SYSTEM_PROMPT}
-        
+
         Please extract key financial figures from the following document:
-        
+
         {text[:50000]}  # Limit text to avoid token limits
-        
+
         For each key figure, provide:
         1. Name of the figure (e.g., "Annual Revenue", "Net Income", "Debt-to-Equity Ratio")
         2. Value (e.g., "$1.25 billion", "15%", "0.68")
         3. Source page number if available
-        
+
         Format your response as a JSON array of objects with "name", "value", and "source_page" fields.
         """
-        
-        key_figures_response = call_openai_api(key_figures_prompt)
+
+        # Check for cancellation before key figures extraction
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI processing cancelled before key figures extraction")
+            return {"error": "Processing cancelled"}
+
+        key_figures_response = call_openai_api(key_figures_prompt, cancel_event)
         
         # Parse key figures from response
         key_figures = extract_key_figures_from_response(key_figures_response)
@@ -577,12 +608,17 @@ def extract_text_from_document(file_path: str) -> str:
         logger.error(f"Error extracting text from document {file_path}: {e}")
         return f"Error extracting text: {str(e)}"
 
-def call_ollama_api(prompt: str) -> str:
-    """Call Ollama API with prompt."""
+def call_ollama_api(prompt: str, cancel_event=None) -> str:
+    """Call Ollama API with prompt and cancellation support."""
     # Declare global variable at the very beginning of the function
     global OLLAMA_BASE_URL
-    
+
     try:
+        # Check for cancellation before starting
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama API call cancelled before starting")
+            return "Processing cancelled"
+
         # Try multiple URLs to find Ollama
         urls_to_try = [
             OLLAMA_BASE_URL,
@@ -590,7 +626,7 @@ def call_ollama_api(prompt: str) -> str:
             "http://localhost:11434",
             "http://172.17.0.1:11434"  # Docker default bridge network
         ]
-        
+
         working_url = None
         for url in urls_to_try:
             try:
@@ -606,10 +642,15 @@ def call_ollama_api(prompt: str) -> str:
                     break
             except Exception as e:
                 logger.warning(f"Failed to connect to Ollama at {url}: {e}")
-        
+
         if not working_url:
             return "Error: Could not connect to Ollama server. Please ensure Ollama is running and accessible."
-        
+
+        # Check for cancellation before making the request
+        if cancel_event and cancel_event.is_set():
+            logger.info("Ollama API call cancelled before request")
+            return "Processing cancelled"
+
         # Prepare request payload with max tokens
         payload = {
             "model": OLLAMA_MODEL,
@@ -619,32 +660,78 @@ def call_ollama_api(prompt: str) -> str:
                 "num_ctx": OLLAMA_MAX_TOKENS  # Use the configured max tokens
             }
         }
-        
+
         if OLLAMA_USE_CPU:
             payload["options"]["num_gpu"] = 0
-        
-        # Call Ollama API
-        response = requests.post(
-            f"{working_url}/api/generate",
-            json=payload,
-            timeout=300  # 5 minutes timeout
-        )
-        
-        if response.status_code == 200:
-            return response.json().get("response", "")
-        else:
-            logger.error(f"Ollama API error: {response.status_code} - {response.text}")
-            return f"Error: Ollama API returned status code {response.status_code}"
+
+        # Create a session for better control
+        session = requests.Session()
+
+        # Call Ollama API with reasonable timeout and cancellation checks
+        logger.info("Starting Ollama API request")
+        try:
+            response = session.post(
+                f"{working_url}/api/generate",
+                json=payload,
+                timeout=900  # 15 minutes timeout - reasonable for large documents
+            )
+
+            # Check for cancellation after request
+            if cancel_event and cancel_event.is_set():
+                logger.info("Ollama API call cancelled after request")
+                session.close()
+                return "Processing cancelled"
+
+            if response.status_code == 200:
+                result = response.json().get("response", "")
+                session.close()
+                return result
+            else:
+                logger.error(f"Ollama API error: {response.status_code} - {response.text}")
+                session.close()
+                return f"Error: Ollama API returned status code {response.status_code}"
+        except requests.exceptions.Timeout:
+            logger.warning("Ollama API request timed out after 5 minutes")
+            session.close()
+            if cancel_event and cancel_event.is_set():
+                return "Processing cancelled"
+            return "Error: Request timed out after 5 minutes. The document may be too large or complex for processing."
+        except Exception as e:
+            logger.error(f"Error during Ollama API request: {e}")
+            session.close()
+            raise
+
     except Exception as e:
         logger.error(f"Error calling Ollama API: {e}")
         return f"Error: {str(e)}"
 
-def call_openai_api(prompt: str) -> str:
-    """Call OpenAI API with prompt."""
+def call_openai_api(prompt: str, cancel_event=None) -> str:
+    """Call OpenAI API with prompt (supports OpenAI and LM Studio)."""
     try:
+        # Check for cancellation before starting
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI API call cancelled before starting")
+            return "Processing cancelled"
+
         import openai
-        openai.api_key = OPENAI_API_KEY
-        
+
+        # Configure OpenAI client for custom base URL (LM Studio support)
+        if OPENAI_BASE_URL != "https://api.openai.com/v1":
+            # LM Studio or other OpenAI-compatible API
+            logger.info(f"Using custom OpenAI-compatible API at: {OPENAI_BASE_URL}")
+            openai.api_base = OPENAI_BASE_URL
+            # For LM Studio, API key can be anything or empty
+            openai.api_key = OPENAI_API_KEY if OPENAI_API_KEY != "none" else "lm-studio"
+        else:
+            # Standard OpenAI API
+            openai.api_key = OPENAI_API_KEY
+
+        # Check for cancellation before making request
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI API call cancelled before request")
+            return "Processing cancelled"
+
+        logger.info(f"Calling OpenAI-compatible API with model: {OPENAI_MODEL}")
         response = openai.ChatCompletion.create(
             model=OPENAI_MODEL,
             messages=[
@@ -652,12 +739,20 @@ def call_openai_api(prompt: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             max_tokens=2000,
-            temperature=0.3
+            temperature=0.3,
+            timeout=300  # 5 minutes timeout
         )
-        
+
+        # Check for cancellation after request
+        if cancel_event and cancel_event.is_set():
+            logger.info("OpenAI API call cancelled after request")
+            return "Processing cancelled"
+
         return response.choices[0].message.content
     except Exception as e:
         logger.error(f"Error calling OpenAI API: {e}")
+        if cancel_event and cancel_event.is_set():
+            return "Processing cancelled"
         return f"Error: {str(e)}"
 
 def extract_key_figures_from_response(response: str) -> List[Dict[str, Any]]:
@@ -993,39 +1088,52 @@ def get_llm_status() -> Dict[str, Any]:
             status["error"] = str(e)
     elif LLM_MODE == "openai":
         status["model"] = OPENAI_MODEL
-        
-        # Check OpenAI API key
-        if not OPENAI_API_KEY:
-            status["status"] = "error"
-            status["error"] = "OpenAI API key not provided"
+        status["base_url"] = OPENAI_BASE_URL
+
+        # Check if using LM Studio or OpenAI
+        if OPENAI_BASE_URL != "https://api.openai.com/v1":
+            status["provider"] = "LM Studio (or OpenAI-compatible)"
+            # For LM Studio, API key is optional
+            if not OPENAI_API_KEY or OPENAI_API_KEY == "none":
+                status["api_key_status"] = "Using default (LM Studio doesn't require API key)"
+            else:
+                status["api_key_status"] = "Custom API key provided"
+        else:
+            status["provider"] = "OpenAI"
+            # Check OpenAI API key
+            if not OPENAI_API_KEY or OPENAI_API_KEY == "none":
+                status["status"] = "error"
+                status["error"] = "OpenAI API key not provided"
     else:
         status["status"] = "error"
         status["error"] = f"Unknown LLM mode: {LLM_MODE}"
     
     return status
 
-def set_llm_mode(mode: str, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+def set_llm_mode(mode: str, api_key: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None) -> Dict[str, Any]:
     """Set LLM mode."""
-    global LLM_MODE, OPENAI_API_KEY, OPENAI_MODEL, OLLAMA_MODEL
-    
+    global LLM_MODE, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL, OLLAMA_MODEL
+
     if mode not in ["mock", "ollama", "openai"]:
         return {
             "status": "error",
             "message": f"Invalid LLM mode: {mode}. Must be one of: mock, ollama, openai"
         }
-    
+
     # Update mode
     LLM_MODE = mode
-    
-    # Update API key and model if provided
-    if mode == "openai" and api_key:
-        OPENAI_API_KEY = api_key
-    
-    if mode == "openai" and model:
-        OPENAI_MODEL = model
+
+    # Update API key, model, and base URL if provided
+    if mode == "openai":
+        if api_key:
+            OPENAI_API_KEY = api_key
+        if model:
+            OPENAI_MODEL = model
+        if base_url:
+            OPENAI_BASE_URL = base_url
     elif mode == "ollama" and model:
         OLLAMA_MODEL = model
-    
+
     return {
         "status": "success",
         "message": f"LLM mode set to {mode}",

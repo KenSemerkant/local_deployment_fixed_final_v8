@@ -57,8 +57,12 @@ class LLMStatusResponse(BaseModel):
     mode: str
     model: Optional[str]
     error: Optional[str]
+    base_url: Optional[str] = None
+    provider: Optional[str] = None
+    api_key_status: Optional[str] = None
 
 class LLMModeRequest(BaseModel):
     mode: str
     api_key: Optional[str] = None
     model: Optional[str] = None
+    base_url: Optional[str] = None

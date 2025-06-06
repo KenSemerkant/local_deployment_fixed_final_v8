@@ -41,6 +41,7 @@ const Dashboard: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [cancellingDocuments, setCancellingDocuments] = useState<Set<string>>(new Set());
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -50,6 +51,11 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     console.log("Dashboard useEffect triggered, fetching documents");
     fetchDocuments();
+
+    // Cleanup polling on unmount
+    return () => {
+      stopPolling();
+    };
   }, []);
 
   const fetchDocuments = async () => {
@@ -59,7 +65,7 @@ const Dashboard: React.FC = () => {
       console.log("Calling documentService.getDocuments()");
       const docs = await documentService.getDocuments();
       console.log("Documents fetched successfully:", docs);
-      
+
       // Debug: Check if docs is an array
       if (!Array.isArray(docs)) {
         console.error("Fetched documents is not an array:", docs);
@@ -68,6 +74,14 @@ const Dashboard: React.FC = () => {
         console.log(`Received ${docs.length} documents`);
         setDocuments(docs);
         setError('');
+
+        // Check if any documents are processing and start/stop polling accordingly
+        const processingDocs = docs.filter(doc => doc.status === 'PROCESSING');
+        if (processingDocs.length > 0 && !pollingInterval) {
+          startPolling();
+        } else if (processingDocs.length === 0 && pollingInterval) {
+          stopPolling();
+        }
       }
     } catch (err: any) {
       console.error('Error fetching documents:', err);
@@ -76,6 +90,37 @@ const Dashboard: React.FC = () => {
     } finally {
       console.log("Setting loading to false");
       setLoading(false);
+    }
+  };
+
+  const startPolling = () => {
+    if (pollingInterval) return; // Already polling
+
+    console.log("Starting polling for document status updates");
+    const interval = setInterval(async () => {
+      try {
+        const docs = await documentService.getDocuments();
+        setDocuments(docs);
+
+        // Stop polling if no documents are processing
+        const processingDocs = docs.filter(doc => doc.status === 'PROCESSING');
+        if (processingDocs.length === 0) {
+          console.log("No more processing documents, stopping polling");
+          stopPolling();
+        }
+      } catch (err) {
+        console.error('Error polling documents:', err);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    setPollingInterval(interval);
+  };
+
+  const stopPolling = () => {
+    if (pollingInterval) {
+      console.log("Stopping polling");
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
     }
   };
 

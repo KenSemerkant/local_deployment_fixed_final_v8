@@ -1,0 +1,35 @@
+# Docker Compose configuration for using LM Studio
+# Copy this file to docker-compose.override.yml to use LM Studio instead of Ollama
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      # Configure to use LM Studio via OpenAI-compatible API
+      - LLM_MODE=openai
+      - OPENAI_BASE_URL=http://host.docker.internal:1234/v1  # LM Studio default URL
+      - OPENAI_API_KEY=lm-studio  # Can be any value for LM Studio
+      - OPENAI_MODEL=deepseek-r1-0528-qwen3-8b-mlx  # DeepSeek R1 model
+      
+      # Optional: Enable caching for better performance
+      - ENABLE_CACHING=true
+      
+      # Optional: Adjust other settings
+      - MOCK_DELAY=1  # Reduce delay for testing
+
+# Instructions:
+# 1. Install and run LM Studio on your host machine
+# 2. Download the DeepSeek model: deepseek-r1-0528-qwen3-8b-mlx
+# 3. Start the Local Server in LM Studio (usually runs on port 1234)
+# 4. Ensure the model name matches exactly: deepseek-r1-0528-qwen3-8b-mlx
+# 5. Copy this file to docker-compose.override.yml:
+#    cp docker-compose.lmstudio.yml docker-compose.override.yml
+# 6. Start the application:
+#    docker compose up
+
+# For Linux users:
+# Replace "host.docker.internal" with "172.17.0.1" in OPENAI_BASE_URL
+
+# To find your model name:
+# curl http://localhost:1234/v1/models

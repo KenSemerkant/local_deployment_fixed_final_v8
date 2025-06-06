@@ -19,11 +19,15 @@ services:
       - MINIO_SECURE=false
       - DOCUMENTS_BUCKET=documents
       - STORAGE_PATH=/data
-      - LLM_MODE=ollama  # Changed from 'mock' to 'ollama'
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - OLLAMA_MODEL=gemma3:27b
-      - OLLAMA_USE_CPU=false
-      - OLLAMA_MAX_TOKENS=8192  # Added configurable max context tokens
+      - LLM_MODE=openai  # Using LM Studio via OpenAI-compatible API
+      - OPENAI_BASE_URL=http://host.docker.internal:1234/v1  # LM Studio default URL
+      - OPENAI_API_KEY=lm-studio  # Can be any value for LM Studio
+      - OPENAI_MODEL=deepseek-r1-0528-qwen3-8b-mlx  # DeepSeek model in LM Studio
+      # Ollama settings (kept for easy switching back)
+      # - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # - OLLAMA_MODEL=deepseek-r1:14b
+      # - OLLAMA_USE_CPU=false
+      # - OLLAMA_MAX_TOKENS=20000
       - ENABLE_CACHING=true
     extra_hosts:
       - "host.docker.internal:host-gateway"

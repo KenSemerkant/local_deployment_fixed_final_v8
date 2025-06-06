@@ -330,7 +330,7 @@ def get_llm_status_endpoint(current_user: User = Depends(get_current_user)):
 
 @app.post("/llm/mode", response_model=LLMStatusResponse)
 def set_llm_mode_endpoint(request: LLMModeRequest, current_user: User = Depends(get_current_user)):
-    result = set_llm_mode(request.mode, request.api_key, request.model)
+    result = set_llm_mode(request.mode, request.api_key, request.model, request.base_url)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return get_llm_status()
