@@ -1,0 +1,24 @@
+FINANCIAL STATEMENT TEST DOCUMENT
+
+Company: Test Corp
+Year: 2024
+
+INCOME STATEMENT
+Revenue: $1,000,000
+Cost of Goods Sold: $600,000
+Gross Profit: $400,000
+Operating Expenses: $200,000
+Net Income: $200,000
+
+BALANCE SHEET
+Total Assets: $2,000,000
+Total Liabilities: $800,000
+Shareholders' Equity: $1,200,000
+
+CASH FLOW STATEMENT
+Operating Cash Flow: $250,000
+Investing Cash Flow: -$100,000
+Financing Cash Flow: -$50,000
+Net Cash Flow: $100,000
+
+This is a test document to verify that the LangChain integration with LM Studio is working properly for financial document analysis.

@@ -706,25 +706,40 @@ def call_ollama_api(prompt: str, cancel_event=None) -> str:
         return f"Error: {str(e)}"
 
 def call_openai_api(prompt: str, cancel_event=None) -> str:
-    """Call OpenAI API with prompt (supports OpenAI and LM Studio)."""
+    """Call OpenAI-compatible API using LangChain (supports OpenAI and LM Studio)."""
     try:
         # Check for cancellation before starting
         if cancel_event and cancel_event.is_set():
             logger.info("OpenAI API call cancelled before starting")
             return "Processing cancelled"
 
-        import openai
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-        # Configure OpenAI client for custom base URL (LM Studio support)
+        # Configure LangChain ChatOpenAI for custom base URL (LM Studio support)
         if OPENAI_BASE_URL != "https://api.openai.com/v1":
             # LM Studio or other OpenAI-compatible API
             logger.info(f"Using custom OpenAI-compatible API at: {OPENAI_BASE_URL}")
-            openai.api_base = OPENAI_BASE_URL
             # For LM Studio, API key can be anything or empty
-            openai.api_key = OPENAI_API_KEY if OPENAI_API_KEY != "none" else "lm-studio"
+            api_key = OPENAI_API_KEY if OPENAI_API_KEY != "none" else "lm-studio"
+
+            chat = ChatOpenAI(
+                model=OPENAI_MODEL,
+                openai_api_base=OPENAI_BASE_URL,
+                openai_api_key=api_key,
+                max_tokens=2000,
+                temperature=0.3,
+                request_timeout=300  # 5 minutes timeout
+            )
         else:
             # Standard OpenAI API
-            openai.api_key = OPENAI_API_KEY
+            chat = ChatOpenAI(
+                model=OPENAI_MODEL,
+                openai_api_key=OPENAI_API_KEY,
+                max_tokens=2000,
+                temperature=0.3,
+                request_timeout=300  # 5 minutes timeout
+            )
 
         # Check for cancellation before making request
         if cancel_event and cancel_event.is_set():
@@ -732,25 +747,24 @@ def call_openai_api(prompt: str, cancel_event=None) -> str:
             return "Processing cancelled"
 
         logger.info(f"Calling OpenAI-compatible API with model: {OPENAI_MODEL}")
-        response = openai.ChatCompletion.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": FINANCIAL_ANALYST_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=2000,
-            temperature=0.3,
-            timeout=300  # 5 minutes timeout
-        )
+
+        # Create messages
+        messages = [
+            SystemMessage(content=FINANCIAL_ANALYST_SYSTEM_PROMPT),
+            HumanMessage(content=prompt)
+        ]
+
+        # Make the API call
+        response = chat(messages)
 
         # Check for cancellation after request
         if cancel_event and cancel_event.is_set():
             logger.info("OpenAI API call cancelled after request")
             return "Processing cancelled"
 
-        return response.choices[0].message.content
+        return response.content
     except Exception as e:
-        logger.error(f"Error calling OpenAI API: {e}")
+        logger.error(f"Error calling OpenAI API with LangChain: {e}")
         if cancel_event and cancel_event.is_set():
             return "Processing cancelled"
         return f"Error: {str(e)}"
