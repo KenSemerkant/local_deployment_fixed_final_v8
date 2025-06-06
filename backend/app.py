@@ -9,7 +9,7 @@ import json
 import shutil
 import logging
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # FastAPI imports
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks, status
@@ -22,14 +22,27 @@ from sqlalchemy.orm import Session
 from models import Base, User, Document, AnalysisResult, QASession, Question
 from schemas import (
     UserCreate, UserResponse, Token, DocumentResponse, AnalysisResultResponse,
-    QuestionRequest, QuestionResponse, LLMStatusResponse, LLMModeRequest
+    QuestionRequest, QuestionResponse, LLMStatusResponse, LLMModeRequest,
+    AdminUserCreate, AdminUserUpdate, AdminUserResponse, AdminUserListResponse,
+    LLMVendorConfig, LLMConfigResponse, LLMModelListResponse,
+    StorageOverviewResponse, UserStorageResponse, StorageCleanupResult
 )
 from config import engine, SessionLocal, STORAGE_PATH, DOCUMENTS_BUCKET, minio_client
-from auth import get_db, get_current_user
+from auth import get_db, get_current_user, get_current_admin_user
 from utils import (
     authenticate_user, create_user, get_user_by_email, get_document_by_id,
     get_analysis_result, create_qa_session, create_question,
-    delete_document_and_related_data
+    delete_document_and_related_data, get_all_users, get_user_count,
+    get_user_by_id, create_admin_user, update_user, delete_user,
+    get_user_document_count
+)
+from llm_config import (
+    SUPPORTED_VENDORS, load_llm_config, save_llm_config, get_vendor_models,
+    validate_config, test_llm_connection
+)
+from storage_management import (
+    get_storage_overview, get_user_storage_details, cleanup_user_storage,
+    cleanup_orphaned_files
 )
 from background_tasks import process_document_task, task_manager
 from llm_integration import (
@@ -77,7 +90,7 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = get_user_by_email(db, user.email)
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    return create_user(db, user.email, user.password)
+    return create_user(db, user.email, user.password, user.full_name)
 
 @app.get("/users/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(get_current_user)):
@@ -386,6 +399,348 @@ def clear_document_cache_endpoint(document_id: int, current_user: User = Depends
     else:
         raise HTTPException(status_code=500, detail="Failed to clear cache")
 
+# Admin endpoints
+@app.get("/admin/users", response_model=AdminUserListResponse)
+def get_users_admin(
+    page: int = 1,
+    per_page: int = 20,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get all users (admin only)."""
+    skip = (page - 1) * per_page
+    users = get_all_users(db, skip=skip, limit=per_page)
+    total = get_user_count(db)
+    total_pages = (total + per_page - 1) // per_page
+
+    # Add document count for each user
+    admin_users = []
+    for user in users:
+        doc_count = get_user_document_count(db, user.id)
+        admin_user_data = AdminUserResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            is_active=user.is_active,
+            is_admin=user.is_admin,
+            last_login=user.last_login,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+            document_count=doc_count
+        )
+        admin_users.append(admin_user_data)
+
+    return AdminUserListResponse(
+        users=admin_users,
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages
+    )
+
+@app.post("/admin/users", response_model=AdminUserResponse)
+def create_user_admin(
+    user_data: AdminUserCreate,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new user (admin only)."""
+    # Check if email already exists
+    existing_user = get_user_by_email(db, user_data.email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    new_user = create_admin_user(
+        db=db,
+        email=user_data.email,
+        password=user_data.password,
+        full_name=user_data.full_name,
+        is_active=user_data.is_active,
+        is_admin=user_data.is_admin
+    )
+
+    doc_count = get_user_document_count(db, new_user.id)
+    return AdminUserResponse(
+        id=new_user.id,
+        email=new_user.email,
+        full_name=new_user.full_name,
+        is_active=new_user.is_active,
+        is_admin=new_user.is_admin,
+        last_login=new_user.last_login,
+        created_at=new_user.created_at,
+        updated_at=new_user.updated_at,
+        document_count=doc_count
+    )
+
+@app.get("/admin/users/{user_id}", response_model=AdminUserResponse)
+def get_user_admin(
+    user_id: int,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific user (admin only)."""
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    doc_count = get_user_document_count(db, user.id)
+    return AdminUserResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        is_admin=user.is_admin,
+        last_login=user.last_login,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        document_count=doc_count
+    )
+
+@app.put("/admin/users/{user_id}", response_model=AdminUserResponse)
+def update_user_admin(
+    user_id: int,
+    user_data: AdminUserUpdate,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Update a user (admin only)."""
+    # Check if user exists
+    existing_user = get_user_by_id(db, user_id)
+    if not existing_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if email is being changed and if it already exists
+    if user_data.email and user_data.email != existing_user.email:
+        email_user = get_user_by_email(db, user_data.email)
+        if email_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    updated_user = update_user(
+        db=db,
+        user_id=user_id,
+        email=user_data.email,
+        full_name=user_data.full_name,
+        is_active=user_data.is_active,
+        is_admin=user_data.is_admin,
+        password=user_data.password
+    )
+
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    doc_count = get_user_document_count(db, updated_user.id)
+    return AdminUserResponse(
+        id=updated_user.id,
+        email=updated_user.email,
+        full_name=updated_user.full_name,
+        is_active=updated_user.is_active,
+        is_admin=updated_user.is_admin,
+        last_login=updated_user.last_login,
+        created_at=updated_user.created_at,
+        updated_at=updated_user.updated_at,
+        document_count=doc_count
+    )
+
+@app.delete("/admin/users/{user_id}")
+def delete_user_admin(
+    user_id: int,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a user (admin only)."""
+    # Prevent admin from deleting themselves
+    if user_id == admin_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    success = delete_user(db, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"message": "User deleted successfully"}
+
+# LLM Configuration endpoints (Admin only)
+@app.get("/admin/llm/config", response_model=LLMConfigResponse)
+def get_llm_config_admin(admin_user: User = Depends(get_current_admin_user)):
+    """Get current LLM configuration (admin only)."""
+    try:
+        current_config = load_llm_config()
+
+        # Get available models for each vendor
+        vendor_models = {}
+        for vendor_key, vendor_info in SUPPORTED_VENDORS.items():
+            try:
+                models = get_vendor_models(vendor_key)
+                vendor_models[vendor_key] = models
+            except Exception as e:
+                logger.warning(f"Could not fetch models for {vendor_key}: {e}")
+                vendor_models[vendor_key] = vendor_info["default_models"]
+
+        return LLMConfigResponse(
+            current_vendor=current_config.get("vendor", "openai"),
+            current_model=current_config.get("model"),
+            current_config=current_config,
+            available_vendors=list(SUPPORTED_VENDORS.keys()),
+            vendor_models=vendor_models,
+            status="success"
+        )
+    except Exception as e:
+        logger.error(f"Error getting LLM config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/llm/config")
+def update_llm_config_admin(
+    config: LLMVendorConfig,
+    admin_user: User = Depends(get_current_admin_user)
+):
+    """Update LLM configuration (admin only)."""
+    try:
+        logger.info(f"Received LLM config update: {config}")
+
+        # Convert to dict
+        config_dict = {
+            "vendor": config.vendor,
+            "api_key": config.api_key,
+            "base_url": config.base_url,
+            "model": config.model,
+            "temperature": config.temperature or 0.3,
+            "max_tokens": config.max_tokens or 2000,
+            "timeout": config.timeout or 300
+        }
+
+        logger.info(f"Config dict: {config_dict}")
+
+        # Validate configuration
+        validation = validate_config(config_dict)
+        logger.info(f"Validation result: {validation}")
+
+        if not validation["valid"]:
+            logger.error(f"Validation failed: {validation['errors']}")
+            raise HTTPException(status_code=400, detail={"errors": validation["errors"]})
+
+        # Save configuration
+        if not save_llm_config(config_dict):
+            raise HTTPException(status_code=500, detail="Failed to save configuration")
+
+        return {"message": "LLM configuration updated successfully", "config": config_dict}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating LLM config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/llm/vendors")
+def get_llm_vendors_admin(admin_user: User = Depends(get_current_admin_user)):
+    """Get available LLM vendors (admin only)."""
+    return {
+        "vendors": SUPPORTED_VENDORS
+    }
+
+@app.get("/admin/llm/models/{vendor}", response_model=LLMModelListResponse)
+def get_vendor_models_admin(
+    vendor: str,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    admin_user: User = Depends(get_current_admin_user)
+):
+    """Get available models for a specific vendor (admin only)."""
+    try:
+        if vendor not in SUPPORTED_VENDORS:
+            raise HTTPException(status_code=400, detail=f"Unsupported vendor: {vendor}")
+
+        models = get_vendor_models(vendor, base_url, api_key)
+        return LLMModelListResponse(
+            vendor=vendor,
+            models=models
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting models for {vendor}: {e}")
+        return LLMModelListResponse(
+            vendor=vendor,
+            models=SUPPORTED_VENDORS[vendor]["default_models"],
+            error=str(e)
+        )
+
+@app.post("/admin/llm/test")
+def test_llm_config_admin(
+    config: LLMVendorConfig,
+    admin_user: User = Depends(get_current_admin_user)
+):
+    """Test LLM configuration (admin only)."""
+    try:
+        config_dict = {
+            "vendor": config.vendor,
+            "api_key": config.api_key,
+            "base_url": config.base_url,
+            "model": config.model,
+            "temperature": config.temperature or 0.3,
+            "max_tokens": config.max_tokens or 2000,
+            "timeout": config.timeout or 300
+        }
+
+        result = test_llm_connection(config_dict)
+        return result
+    except Exception as e:
+        logger.error(f"Error testing LLM config: {e}")
+        return {"success": False, "error": str(e)}
+
+# Storage Management endpoints (Admin only)
+@app.get("/admin/storage/overview", response_model=StorageOverviewResponse)
+def get_storage_overview_admin(admin_user: User = Depends(get_current_admin_user)):
+    """Get storage overview (admin only)."""
+    try:
+        overview = get_storage_overview()
+        return StorageOverviewResponse(**overview)
+    except Exception as e:
+        logger.error(f"Error getting storage overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/storage/users", response_model=UserStorageResponse)
+def get_user_storage_admin(
+    user_id: Optional[int] = None,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get user storage details (admin only)."""
+    try:
+        user_storage = get_user_storage_details(db, user_id)
+        return UserStorageResponse(users=user_storage)
+    except Exception as e:
+        logger.error(f"Error getting user storage details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/storage/cleanup/user/{user_id}", response_model=StorageCleanupResult)
+def cleanup_user_storage_admin(
+    user_id: int,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Clean up storage for a specific user (admin only)."""
+    try:
+        # Check if user exists
+        user = get_user_by_id(db, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        result = cleanup_user_storage(db, user_id)
+        return StorageCleanupResult(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cleaning up user storage: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/storage/cleanup/orphaned", response_model=StorageCleanupResult)
+def cleanup_orphaned_files_admin(admin_user: User = Depends(get_current_admin_user)):
+    """Clean up orphaned files (admin only)."""
+    try:
+        result = cleanup_orphaned_files()
+        return StorageCleanupResult(**result)
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/admin/clear-all-cache")
 def clear_all_cache_endpoint(current_user: User = Depends(get_current_user)):
     """Clear all cache data (admin function)."""
@@ -500,8 +855,15 @@ def startup_event():
         demo_user = get_user_by_email(db, "demo@example.com")
         if not demo_user:
             logger.info("Creating demo user on startup")
-            create_user(db, "demo@example.com", "demo123")
+            create_user(db, "demo@example.com", "demo123", "Demo User")
             logger.info("Demo user created successfully")
+
+        # Create admin user if not exists
+        admin_user = get_user_by_email(db, "admin@example.com")
+        if not admin_user:
+            logger.info("Creating admin user on startup")
+            create_admin_user(db, "admin@example.com", "admin123", "Admin User", is_active=True, is_admin=True)
+            logger.info("Admin user created successfully")
 
 # Run the application
 if __name__ == "__main__":

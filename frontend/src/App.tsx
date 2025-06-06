@@ -9,9 +9,14 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import DocumentView from './pages/DocumentView';
+import AdminDashboard from './pages/AdminDashboard';
+import UserManagement from './pages/UserManagement';
+import LLMConfiguration from './pages/LLMConfiguration';
+import StorageManagement from './pages/StorageManagement';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
+import AdminRoute from './components/AdminRoute';
 import Header from './components/Header';
 
 // Create theme
@@ -54,13 +59,53 @@ function App() {
                 </ProtectedRoute>
               } 
             />
-            <Route 
-              path="/documents/:documentId" 
+            <Route
+              path="/documents/:documentId"
               element={
                 <ProtectedRoute>
                   <DocumentView />
                 </ProtectedRoute>
-              } 
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <AdminDashboard />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/users"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <UserManagement />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/llm"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <LLMConfiguration />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/storage"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <StorageManagement />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
             />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
           </Routes>

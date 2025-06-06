@@ -2,7 +2,7 @@ import os
 import json
 import shutil
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from models import User, Document, AnalysisResult, QASession, Question
 from config import STORAGE_PATH, DOCUMENTS_BUCKET, minio_client
@@ -32,14 +32,77 @@ def authenticate_user(db: Session, email: str, password: str):
         return False
     return user
 
-def create_user(db: Session, email: str, password: str):
+def create_user(db: Session, email: str, password: str, full_name: Optional[str] = None):
     """Create a new user."""
     hashed_password = get_password_hash(password)
-    db_user = User(email=email, hashed_password=hashed_password)
+    db_user = User(email=email, hashed_password=hashed_password, full_name=full_name)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return db_user
+
+# Admin user management functions
+def get_all_users(db: Session, skip: int = 0, limit: int = 100):
+    """Get all users with pagination."""
+    return db.query(User).offset(skip).limit(limit).all()
+
+def get_user_count(db: Session):
+    """Get total user count."""
+    return db.query(User).count()
+
+def get_user_by_id(db: Session, user_id: int):
+    """Get user by ID."""
+    return db.query(User).filter(User.id == user_id).first()
+
+def create_admin_user(db: Session, email: str, password: str, full_name: Optional[str] = None, is_active: bool = True, is_admin: bool = False):
+    """Create a new user (admin function)."""
+    hashed_password = get_password_hash(password)
+    db_user = User(
+        email=email,
+        hashed_password=hashed_password,
+        full_name=full_name,
+        is_active=is_active,
+        is_admin=is_admin
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def update_user(db: Session, user_id: int, email: Optional[str] = None, full_name: Optional[str] = None, is_active: Optional[bool] = None, is_admin: Optional[bool] = None, password: Optional[str] = None):
+    """Update user (admin function)."""
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+
+    if email is not None:
+        db_user.email = email
+    if full_name is not None:
+        db_user.full_name = full_name
+    if is_active is not None:
+        db_user.is_active = is_active
+    if is_admin is not None:
+        db_user.is_admin = is_admin
+    if password is not None:
+        db_user.hashed_password = get_password_hash(password)
+
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def delete_user(db: Session, user_id: int):
+    """Delete user (admin function)."""
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return False
+
+    db.delete(db_user)
+    db.commit()
+    return True
+
+def get_user_document_count(db: Session, user_id: int):
+    """Get document count for a user."""
+    return db.query(Document).filter(Document.owner_id == user_id).count()
 
 def get_document_by_id(db: Session, document_id: int, user_id: int):
     """Get document by ID for a specific user."""

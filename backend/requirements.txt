@@ -14,3 +14,4 @@ pymupdf==1.23.3
 python-dotenv==1.0.0
 email-validator==2.1.0
 sqlalchemy==1.4.49
+requests>=2.25.0

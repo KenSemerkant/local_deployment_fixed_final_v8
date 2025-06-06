@@ -227,7 +227,7 @@ const Dashboard: React.FC = () => {
             </Button>
           </Box>
           <Typography variant="body1" color="text.secondary">
-            Welcome, {user?.name || user?.email || 'User'}. Manage your financial documents here.
+            Welcome, {user?.full_name || user?.email || 'User'}. Manage your financial documents here.
           </Typography>
         </Paper>
 

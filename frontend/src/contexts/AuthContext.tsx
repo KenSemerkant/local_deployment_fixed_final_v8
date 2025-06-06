@@ -5,9 +5,13 @@ import axios from 'axios';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 interface User {
-  user_id: string;
+  id: number;
   email: string;
-  name?: string;
+  full_name?: string;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 interface AuthContextType {
@@ -16,7 +20,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name?: string) => Promise<void>;
+  register: (email: string, password: string, full_name?: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -106,14 +110,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const register = async (email: string, password: string, name?: string) => {
+  const register = async (email: string, password: string, full_name?: string) => {
     setIsLoading(true);
     try {
-      console.log('Attempting registration with:', { email, name });
+      console.log('Attempting registration with:', { email, full_name });
       const response = await axios.post(`${API_URL}/users/`, {
         email,
         password,
-        name,
+        full_name,
       });
 
       console.log('Registration response:', response.data);

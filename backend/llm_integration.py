@@ -63,6 +63,30 @@ Proactive Risk Communication: Immediately identify and articulate any impending 
 Your objective is to provide precise, actionable insights that enable informed decision-making and risk mitigation for financial stakeholders.
 """
 
+def remove_thinking_tags(text: str) -> str:
+    """
+    Remove thinking sections from LLM responses (for models like DeepSeek R1).
+
+    Args:
+        text: The raw LLM response text
+
+    Returns:
+        The text with thinking sections removed
+    """
+    if not text:
+        return text
+
+    # Remove <think>...</think> sections using regex
+    import re
+    # Use DOTALL flag to match newlines within the thinking tags
+    cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Clean up any extra whitespace that might be left
+    cleaned_text = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_text)  # Replace multiple newlines with double newlines
+    cleaned_text = cleaned_text.strip()  # Remove leading/trailing whitespace
+
+    return cleaned_text
+
 # Mock data for demonstration
 MOCK_SUMMARIES = {
     "annual_report": """
@@ -685,6 +709,8 @@ def call_ollama_api(prompt: str, cancel_event=None) -> str:
             if response.status_code == 200:
                 result = response.json().get("response", "")
                 session.close()
+                # Remove thinking sections from response (for models like DeepSeek R1)
+                result = remove_thinking_tags(result)
                 return result
             else:
                 logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -762,7 +788,11 @@ def call_openai_api(prompt: str, cancel_event=None) -> str:
             logger.info("OpenAI API call cancelled after request")
             return "Processing cancelled"
 
-        return response.content
+        # Remove thinking sections from response (for models like DeepSeek R1)
+        content = response.content
+        content = remove_thinking_tags(content)
+
+        return content
     except Exception as e:
         logger.error(f"Error calling OpenAI API with LangChain: {e}")
         if cancel_event and cancel_event.is_set():
