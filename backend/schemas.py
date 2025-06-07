@@ -171,3 +171,50 @@ class StorageCleanupResult(BaseModel):
     cleaned: Dict[str, int]
     errors: List[str]
     error: Optional[str] = None
+
+# Analytics schemas
+class AnalyticsOverviewResponse(BaseModel):
+    period_days: int
+    users: Dict[str, Any]
+    documents: Dict[str, Any]
+    questions: Dict[str, Any]
+    tokens: Dict[str, Any]
+    performance: Dict[str, Any]
+    feedback: Dict[str, Any]
+    error: Optional[str] = None
+
+class UsagePatternsResponse(BaseModel):
+    hourly_usage: List[Dict[str, Any]]
+    daily_usage: List[Dict[str, Any]]
+    top_users: List[Dict[str, Any]]
+    operation_stats: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+class TokenAnalyticsResponse(BaseModel):
+    vendor_usage: List[Dict[str, Any]]
+    operation_usage: List[Dict[str, Any]]
+    daily_trend: List[Dict[str, Any]]
+    top_users: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+class PerformanceAnalyticsResponse(BaseModel):
+    operation_performance: List[Dict[str, Any]]
+    daily_performance: List[Dict[str, Any]]
+    file_size_correlation: List[Dict[str, Any]]
+    error_rates: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+class UserSatisfactionResponse(BaseModel):
+    overall_satisfaction: Dict[str, Any]
+    feedback_by_type: List[Dict[str, Any]]
+    daily_satisfaction: List[Dict[str, Any]]
+    recent_comments: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+class FeedbackRequest(BaseModel):
+    feedback_type: str  # RATING, COMMENT, THUMBS_UP, THUMBS_DOWN
+    rating: Optional[int] = None  # 1-5 scale
+    comment: Optional[str] = None
+    helpful: Optional[bool] = None  # True for thumbs up, False for thumbs down
+    question_id: Optional[int] = None
+    document_id: Optional[int] = None

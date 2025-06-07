@@ -13,6 +13,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import UserManagement from './pages/UserManagement';
 import LLMConfiguration from './pages/LLMConfiguration';
 import StorageManagement from './pages/StorageManagement';
+import Analytics from './pages/Analytics';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -103,6 +104,16 @@ function App() {
                 <ProtectedRoute>
                   <AdminRoute>
                     <StorageManagement />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/analytics"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <Analytics />
                   </AdminRoute>
                 </ProtectedRoute>
               }

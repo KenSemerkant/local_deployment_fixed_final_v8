@@ -25,7 +25,9 @@ from schemas import (
     QuestionRequest, QuestionResponse, LLMStatusResponse, LLMModeRequest,
     AdminUserCreate, AdminUserUpdate, AdminUserResponse, AdminUserListResponse,
     LLMVendorConfig, LLMConfigResponse, LLMModelListResponse,
-    StorageOverviewResponse, UserStorageResponse, StorageCleanupResult
+    StorageOverviewResponse, UserStorageResponse, StorageCleanupResult,
+    AnalyticsOverviewResponse, UsagePatternsResponse, TokenAnalyticsResponse,
+    PerformanceAnalyticsResponse, UserSatisfactionResponse, FeedbackRequest
 )
 from config import engine, SessionLocal, STORAGE_PATH, DOCUMENTS_BUCKET, minio_client
 from auth import get_db, get_current_user, get_current_admin_user
@@ -43,6 +45,11 @@ from llm_config import (
 from storage_management import (
     get_storage_overview, get_user_storage_details, cleanup_user_storage,
     cleanup_orphaned_files
+)
+from analytics import (
+    track_analytics_event, track_token_usage, track_performance_metric, track_user_feedback,
+    get_analytics_overview, get_usage_patterns, get_token_analytics,
+    get_performance_analytics, get_user_satisfaction_analytics
 )
 from background_tasks import process_document_task, task_manager
 from llm_integration import (
@@ -103,24 +110,32 @@ def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    start_time = datetime.utcnow()
+
     # Import ensure_dir_exists from config
     from config import ensure_dir_exists
-    
+
     # Create directory for user if it doesn't exist
     user_dir = f"{STORAGE_PATH}/temp/{current_user.id}"
     ensure_dir_exists(user_dir)
-    
+
     # Save file
     file_path = f"{user_dir}/{file.filename}"
     try:
         with open(file_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
     except Exception as e:
+        # Track failed upload
+        end_time = datetime.utcnow()
+        track_performance_metric(
+            db, current_user.id, "DOCUMENT_UPLOAD", start_time, end_time,
+            success=False, error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=f"Could not save file: {str(e)}")
-    
+
     # Get file size
     file_size = os.path.getsize(file_path)
-    
+
     # Create document in database
     db_document = Document(
         filename=file.filename,
@@ -132,10 +147,21 @@ def upload_document(
     db.add(db_document)
     db.commit()
     db.refresh(db_document)
-    
+
+    # Track analytics
+    end_time = datetime.utcnow()
+    track_analytics_event(
+        db, current_user.id, "DOCUMENT_UPLOAD",
+        {"filename": file.filename, "file_size": file_size, "mime_type": file.content_type}
+    )
+    track_performance_metric(
+        db, current_user.id, "DOCUMENT_UPLOAD", start_time, end_time,
+        success=True, document_id=db_document.id, file_size_bytes=file_size
+    )
+
     # Process document in background
     background_tasks.add_task(process_document_task, db, db_document.id)
-    
+
     return db_document
 
 @app.get("/documents", response_model=List[DocumentResponse])
@@ -211,47 +237,74 @@ def ask_document_question(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    start_time = datetime.utcnow()
+
     document = get_document_by_id(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
     analysis_result = get_analysis_result(db, document_id)
     if not analysis_result:
         raise HTTPException(status_code=404, detail="Analysis result not found")
-    
+
     # Create or get QA session
     qa_session = db.query(QASession).filter(QASession.document_id == document_id).order_by(QASession.created_at.desc()).first()
     if not qa_session:
         qa_session = create_qa_session(db, document_id)
-    
-    # Ask question
-    result = ask_question(analysis_result.vector_db_path, question_request.question)
-    
-    # Create question in database
-    db_question = create_question(
-        db,
-        qa_session.id,
-        question_request.question,
-        result["answer"],
-        result["sources"]
-    )
-    
-    # Parse sources JSON
+
     try:
-        sources = json.loads(db_question.sources)
-    except:
-        sources = []
-    
-    # Create response
-    response = {
-        "id": db_question.id,
-        "question_text": db_question.question_text,
-        "answer_text": db_question.answer_text,
-        "sources": sources,
-        "created_at": db_question.created_at
-    }
-    
-    return response
+        # Ask question
+        result = ask_question(analysis_result.vector_db_path, question_request.question)
+
+        # Create question in database
+        db_question = create_question(
+            db,
+            qa_session.id,
+            question_request.question,
+            result["answer"],
+            result["sources"]
+        )
+
+        # Track analytics
+        end_time = datetime.utcnow()
+        track_analytics_event(
+            db, current_user.id, "QUESTION_ASK",
+            {
+                "document_id": document_id,
+                "question_length": len(question_request.question),
+                "answer_length": len(result["answer"])
+            }
+        )
+        track_performance_metric(
+            db, current_user.id, "QUESTION_ANSWERING", start_time, end_time,
+            success=True, document_id=document_id, question_id=db_question.id
+        )
+
+        # Parse sources JSON
+        try:
+            sources = json.loads(db_question.sources)
+        except:
+            sources = []
+
+        # Create response
+        response = {
+            "id": db_question.id,
+            "question_text": db_question.question_text,
+            "answer_text": db_question.answer_text,
+            "sources": sources,
+            "created_at": db_question.created_at
+        }
+
+        return response
+
+    except Exception as e:
+        # Track failed question
+        end_time = datetime.utcnow()
+        track_performance_metric(
+            db, current_user.id, "QUESTION_ANSWERING", start_time, end_time,
+            success=False, error_message=str(e), document_id=document_id
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/documents/{document_id}/questions", response_model=List[QuestionResponse])
 def list_document_questions(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -739,6 +792,100 @@ def cleanup_orphaned_files_admin(admin_user: User = Depends(get_current_admin_us
         return StorageCleanupResult(**result)
     except Exception as e:
         logger.error(f"Error cleaning up orphaned files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Analytics endpoints (Admin only)
+@app.get("/admin/analytics/overview", response_model=AnalyticsOverviewResponse)
+def get_analytics_overview_admin(
+    days: int = 30,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get analytics overview (admin only)."""
+    try:
+        overview = get_analytics_overview(db, days)
+        return AnalyticsOverviewResponse(**overview)
+    except Exception as e:
+        logger.error(f"Error getting analytics overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/analytics/usage-patterns", response_model=UsagePatternsResponse)
+def get_usage_patterns_admin(
+    days: int = 30,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get usage patterns (admin only)."""
+    try:
+        patterns = get_usage_patterns(db, days)
+        return UsagePatternsResponse(**patterns)
+    except Exception as e:
+        logger.error(f"Error getting usage patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/analytics/tokens", response_model=TokenAnalyticsResponse)
+def get_token_analytics_admin(
+    days: int = 30,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get token usage analytics (admin only)."""
+    try:
+        analytics = get_token_analytics(db, days)
+        return TokenAnalyticsResponse(**analytics)
+    except Exception as e:
+        logger.error(f"Error getting token analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/analytics/performance", response_model=PerformanceAnalyticsResponse)
+def get_performance_analytics_admin(
+    days: int = 30,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get performance analytics (admin only)."""
+    try:
+        analytics = get_performance_analytics(db, days)
+        return PerformanceAnalyticsResponse(**analytics)
+    except Exception as e:
+        logger.error(f"Error getting performance analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/analytics/satisfaction", response_model=UserSatisfactionResponse)
+def get_user_satisfaction_admin(
+    days: int = 30,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get user satisfaction analytics (admin only)."""
+    try:
+        analytics = get_user_satisfaction_analytics(db, days)
+        return UserSatisfactionResponse(**analytics)
+    except Exception as e:
+        logger.error(f"Error getting user satisfaction analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/feedback")
+def submit_feedback(
+    feedback: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit user feedback."""
+    try:
+        track_user_feedback(
+            db=db,
+            user_id=current_user.id,
+            feedback_type=feedback.feedback_type,
+            rating=feedback.rating,
+            comment=feedback.comment,
+            helpful=feedback.helpful,
+            question_id=feedback.question_id,
+            document_id=feedback.document_id
+        )
+        return {"message": "Feedback submitted successfully"}
+    except Exception as e:
+        logger.error(f"Error submitting feedback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/admin/clear-all-cache")

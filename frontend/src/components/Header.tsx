@@ -71,6 +71,9 @@ const Header: React.FC = () => {
                   <MenuItem onClick={() => handleAdminNavigation('/admin/storage')}>
                     Storage Management
                   </MenuItem>
+                  <MenuItem onClick={() => handleAdminNavigation('/admin/analytics')}>
+                    Analytics
+                  </MenuItem>
                 </Menu>
               </>
             )}
