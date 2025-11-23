@@ -1,16 +1,21 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Container, 
-  Box, 
-  Typography, 
-  TextField, 
-  Button, 
-  Paper, 
-  Link, 
+import {
+  Container,
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Paper,
+  Link,
   Alert,
-  CircularProgress
+  CircularProgress,
+  InputAdornment,
+  IconButton
 } from '@mui/material';
+import { motion } from 'framer-motion';
+import { Mail, Lock, User, Eye, EyeOff, UserPlus } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 
 const Register: React.FC = () => {
@@ -19,7 +24,8 @@ const Register: React.FC = () => {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+  const [showPassword, setShowPassword] = useState(false);
+
   const { register } = useAuth();
   const navigate = useNavigate();
 
@@ -30,83 +36,276 @@ const Register: React.FC = () => {
 
     try {
       await register(email, password, name);
+      toast.success('Account created successfully! Welcome! 🎉');
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to register. Please try again.');
+      const errorMessage = err.response?.data?.detail || 'Failed to register. Please try again.';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <Container maxWidth="sm">
-      <Box sx={{ mt: 8, mb: 4 }}>
-        <Paper elevation={3} sx={{ p: 4 }}>
-          <Typography component="h1" variant="h4" align="center" gutterBottom>
-            AI Financial Analyst
-          </Typography>
-          <Typography component="h2" variant="h5" align="center" gutterBottom>
-            Register
-          </Typography>
-          
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          
-          <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2 }}>
-            <TextField
-              margin="normal"
-              required
-              fullWidth
-              id="email"
-              label="Email Address"
-              name="email"
-              autoComplete="email"
-              autoFocus
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <TextField
-              margin="normal"
-              fullWidth
-              id="name"
-              label="Full Name"
-              name="name"
-              autoComplete="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <TextField
-              margin="normal"
-              required
-              fullWidth
-              name="password"
-              label="Password"
-              type="password"
-              id="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <Button
-              type="submit"
-              fullWidth
-              variant="contained"
-              sx={{ mt: 3, mb: 2 }}
-              disabled={isSubmitting}
+    <Box
+      sx={{
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        p: 2,
+      }}
+    >
+      <Container maxWidth="sm">
+        <motion.div
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        >
+          <Paper
+            elevation={0}
+            sx={{
+              p: 6,
+              borderRadius: 4,
+              background: 'rgba(255, 255, 255, 0.95)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
             >
-              {isSubmitting ? <CircularProgress size={24} /> : 'Register'}
-            </Button>
-            <Box sx={{ textAlign: 'center' }}>
-              <Typography variant="body2">
-                Already have an account?{' '}
-                <Link href="/login" variant="body2">
-                  Sign in
-                </Link>
-              </Typography>
-            </Box>
-          </Box>
-        </Paper>
-      </Box>
-    </Container>
+              <Box sx={{ textAlign: 'center', mb: 4 }}>
+                <Typography
+                  component="h1"
+                  variant="h3"
+                  sx={{
+                    fontWeight: 800,
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text',
+                    mb: 1,
+                  }}
+                >
+                  🤖 AI Financial Analyst
+                </Typography>
+                <Typography
+                  variant="h5"
+                  sx={{
+                    color: 'text.secondary',
+                    fontWeight: 600,
+                    mb: 1,
+                  }}
+                >
+                  Create Account
+                </Typography>
+                <Typography
+                  variant="body1"
+                  sx={{
+                    color: 'text.secondary',
+                    opacity: 0.8,
+                  }}
+                >
+                  Join us to unlock AI-powered financial insights
+                </Typography>
+              </Box>
+            </motion.div>
+
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.3 }}
+              >
+                <Alert
+                  severity="error"
+                  sx={{
+                    mb: 3,
+                    borderRadius: 2,
+                    '& .MuiAlert-icon': {
+                      fontSize: '1.2rem',
+                    }
+                  }}
+                >
+                  {error}
+                </Alert>
+              </motion.div>
+            )}
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.4 }}
+            >
+              <Box component="form" onSubmit={handleSubmit}>
+                <TextField
+                  margin="normal"
+                  required
+                  fullWidth
+                  id="email"
+                  label="Email Address"
+                  name="email"
+                  autoComplete="email"
+                  autoFocus
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Mail size={20} style={{ color: '#667eea' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    mb: 2,
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                      },
+                      '&.Mui-focused': {
+                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                      },
+                    },
+                  }}
+                />
+                <TextField
+                  margin="normal"
+                  fullWidth
+                  id="name"
+                  label="Full Name"
+                  name="name"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <User size={20} style={{ color: '#667eea' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    mb: 2,
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                      },
+                      '&.Mui-focused': {
+                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                      },
+                    },
+                  }}
+                />
+                <TextField
+                  margin="normal"
+                  required
+                  fullWidth
+                  name="password"
+                  label="Password"
+                  type={showPassword ? 'text' : 'password'}
+                  id="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Lock size={20} style={{ color: '#667eea' }} />
+                      </InputAdornment>
+                    ),
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          onClick={() => setShowPassword(!showPassword)}
+                          edge="end"
+                          size="small"
+                        >
+                          {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    mb: 3,
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                      },
+                      '&.Mui-focused': {
+                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                      },
+                    },
+                  }}
+                />
+                <motion.div
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <Button
+                    type="submit"
+                    fullWidth
+                    variant="contained"
+                    disabled={isSubmitting}
+                    startIcon={isSubmitting ? <CircularProgress size={20} /> : <UserPlus size={20} />}
+                    sx={{
+                      py: 1.5,
+                      fontSize: '1rem',
+                      fontWeight: 600,
+                      borderRadius: 2,
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                      '&:hover': {
+                        background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
+                        boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                        transform: 'translateY(-1px)',
+                      },
+                      '&:disabled': {
+                        background: 'linear-gradient(135deg, #a0a0a0 0%, #808080 100%)',
+                      },
+                      transition: 'all 0.2s ease-in-out',
+                    }}
+                  >
+                    {isSubmitting ? 'Creating Account...' : 'Create Account'}
+                  </Button>
+                </motion.div>
+
+                <Box sx={{ textAlign: 'center', mt: 3 }}>
+                  <Typography variant="body2">
+                    Already have an account?{' '}
+                    <Link
+                      href="/login"
+                      variant="body2"
+                      sx={{
+                        color: '#667eea',
+                        fontWeight: 600,
+                        textDecoration: 'none',
+                        '&:hover': {
+                          textDecoration: 'underline',
+                        },
+                      }}
+                    >
+                      Sign in here
+                    </Link>
+                  </Typography>
+                </Box>
+              </Box>
+            </motion.div>
+          </Paper>
+        </motion.div>
+      </Container>
+    </Box>
   );
 };
 

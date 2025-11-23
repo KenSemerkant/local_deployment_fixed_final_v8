@@ -101,9 +101,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const { access_token } = response.data;
       localStorage.setItem('token', access_token);
       setToken(access_token);
+
+      // Fetch user data immediately after setting token
+      console.log('Fetching user data after login...');
+      const userResponse = await axios.get(`${API_URL}/users/me`, {
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+        },
+      });
+      console.log('User data received after login:', userResponse.data);
+      setUser(userResponse.data);
+      console.log('Login completed, user state updated');
     } catch (error: any) {
       console.error('Login error:', error);
       console.error('Error response:', error.response?.data);
+      // Clear token if login fails
+      localStorage.removeItem('token');
+      setToken(null);
       throw error;
     } finally {
       setIsLoading(false);
@@ -114,7 +128,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(true);
     try {
       console.log('Attempting registration with:', { email, full_name });
-      const response = await axios.post(`${API_URL}/users/`, {
+      const response = await axios.post(`${API_URL}/register`, {
         email,
         password,
         full_name,
@@ -139,10 +153,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(null);
   };
 
+  const isAuthenticated = !!user && !!token;
+
+  // Debug authentication state changes
+  React.useEffect(() => {
+    console.log('Auth state changed:', {
+      hasUser: !!user,
+      hasToken: !!token,
+      isAuthenticated,
+      isLoading,
+      userEmail: user?.email
+    });
+  }, [user, token, isAuthenticated, isLoading]);
+
   const value = {
     user,
     token,
-    isAuthenticated: !!user,
+    isAuthenticated,
     isLoading,
     login,
     register,
