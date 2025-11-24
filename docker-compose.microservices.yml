@@ -1,32 +1,43 @@
 version: '3.8'
 
 services:
+  # Frontend service - serves the React app
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    restart: unless-stopped
+
   # API Gateway
   gateway:
     build:
-      context: ./gateway
+      context: ./microservices/gateway
       dockerfile: Dockerfile
     ports:
-      - "3000:80"   # Frontend
-      - "8000:8000" # API Gateway
+      - "8000:8000"
     depends_on:
       - auth-service
       - document-service
       - llm-service
       - analytics-service
-      - storage-service
     restart: unless-stopped
 
   # Authentication Service
   auth-service:
     build:
-      context: ./auth-service
+      context: ./microservices/auth-service
       dockerfile: Dockerfile
     expose:
       - "8001"
     environment:
       - DATABASE_URL=sqlite:////data/db/auth.db
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-my-super-secret-key-change-in-production}
+      - JWT_SECRET=${JWT_SECRET:-my-secret-key}
       - REDIS_URL=redis://redis:6379
     volumes:
       - auth_data:/data
@@ -35,7 +46,7 @@ services:
   # Document Processing Service
   document-service:
     build:
-      context: ./document-service
+      context: ./microservices/document-service
       dockerfile: Dockerfile
     expose:
       - "8002"
@@ -57,7 +68,7 @@ services:
   # LLM Integration Service
   llm-service:
     build:
-      context: ./llm-service
+      context: ./microservices/llm-service
       dockerfile: Dockerfile
     expose:
       - "8003"
@@ -77,7 +88,7 @@ services:
   # Analytics Service
   analytics-service:
     build:
-      context: ./analytics-service
+      context: ./microservices/analytics-service
       dockerfile: Dockerfile
     expose:
       - "8004"
@@ -91,7 +102,7 @@ services:
   # Storage Management Service
   storage-service:
     build:
-      context: ./storage-service
+      context: ./microservices/storage-service
       dockerfile: Dockerfile
     expose:
       - "8005"
