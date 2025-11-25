@@ -1,15 +1,14 @@
 FROM nginx:alpine
 
-# Create a default HTML page to serve the frontend
-RUN rm -rf /usr/share/nginx/html/*
-
-# We'll copy the frontend build in the docker-compose volume mount
-# For now, just create a placeholder
-RUN echo "<h1>AI Financial Analyst Microservices</h1>" > /usr/share/nginx/html/index.html
-
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY default.conf /etc/nginx/conf.d/default.conf
+
+# Create directory for frontend build
+RUN mkdir -p /usr/share/nginx/html
+
+# Copy frontend build files to nginx directory
+COPY build/ /usr/share/nginx/html/
 
 EXPOSE 80 8000
 
