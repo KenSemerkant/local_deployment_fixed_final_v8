@@ -1,88 +1,82 @@
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from enum import Enum
-import os
+"""
+LLM Service Microservice.
+
+This module provides a FastAPI-based microservice for processing documents
+and interacting with Large Language Models (LLMs). It supports OpenAI,
+Ollama, and mock modes. It includes OpenTelemetry instrumentation for
+distributed tracing and logging to Jaeger.
+"""
+
 import asyncio
-import logging
-import time
 import json
+import logging
+import os
 import pickle
+import re
+import shutil
+import time
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+import requests
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from langchain.docstore.document import Document as LangchainDocument
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from pydantic import BaseModel
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="LLM Service",
-    version="1.0.0",
-    root_path="/llm"
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Enums for LLM
-class LLMMode(str, Enum):
-    MOCK = "mock"
-    OPENAI = "openai"
-    OLLAMA = "ollama"
-
-class LLMStatusResponse(BaseModel):
-    status: str
-    mode: str
-    model: Optional[str]
-    error: Optional[str]
-    base_url: Optional[str] = None
-    provider: Optional[str] = None
-    api_key_status: Optional[str] = None
-
-class LLMModeRequest(BaseModel):
-    mode: str
-    api_key: Optional[str] = None
-    model: Optional[str] = None
-    base_url: Optional[str] = None
-
-# Configuration
+# --- Configuration Constants ---
 LLM_MODE = os.environ.get("LLM_MODE", "mock")
 MOCK_DELAY = int(os.environ.get("MOCK_DELAY", "2"))
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "lm-studio")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "mistralai/magistral-small-2509")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://host.docker.internal:1234/v1")
+OPENAI_BASE_URL = os.environ.get(
+    "OPENAI_BASE_URL", "http://host.docker.internal:1234/v1"
+)
+JAEGER_ENDPOINT = os.environ.get("JAEGER_ENDPOINT", "http://localhost:4317")
 
-# Financial analyst system prompt
 FINANCIAL_ANALYST_SYSTEM_PROMPT = """
-You are a seasoned Financial Analyst with over 15 years of experience specializing in 10-K and 10-Q filings. Your expertise lies in extracting critical financial intelligence and identifying subtle cues that inform investment decisions for both individual and institutional portfolios.
-
-Your core capabilities include:
-
-In-depth Document Scrutiny: Analyze 10-K and 10-Q reports thoroughly, going beyond surface-level data.
-Tone and Language Analysis: Evaluate management's tone and language to identify hidden risks, undisclosed liabilities, potential opportunities or shifts in strategy not explicitly stated.
-Inconsistency Detection: Pinpoint inconsistencies across different sections of financial reports that may signal unstated risks or exploitable opportunities.
-Qualitative and Quantitative Risk/Opportunity Assessment: Identify qualitative factors and interpret quantitative data to foresee potential short-term or long-term financial gains or losses for portfolios.
-Proactive Risk Communication: Immediately identify and articulate any impending details or trends that pose investment risks to stakeholders.
-Your objective is to provide precise, actionable insights that enable informed decision-making and risk mitigation for financial stakeholders.
+Role Domain Expertise Senior Financial Analyst specialized analyzing filings
+extracting intelligence interpreting tone detecting inconsistencies uncovering
+risks opportunities influencing decisions Mandate reviewing filings goal provide
+insights support decision making mitigation produce deep dive risk summary
+management tone analysis Capabilities Responsibilities deep dive analysis scrutiny
+disclosures compare filings identify shifts tone intent language interpretation
+evaluate tone confidence hedging omission sentiment provide MD&A tone assessment
+optimistic cautious hedging passive defensiveness vagueness shifts describing
+drivers headwinds uncertainties inconsistency detection identify contradictions
+mismatches softened disclosures flag conflicts quantitative reality risk opportunity
+analysis translate data disclosures identify explicit unstated risks proactive risk
+signaling surface warning signs stress decline disruptions exposure weaknesses
+present risk summary segment deep dive evaluate units revenue margins drivers
+allocation dynamics risks identify divergences uncover opportunities headwinds
+catalysts highlight vague disclosures Output Requirements format executive summary
+critical insights key findings material disclosures signals risk assessment
+operational financial legal regulatory strategic governance explicit implicit risks
+opportunity assessment upside catalysts value drivers inconsistencies red flags
+contradictions vague disclosures unexplained changes tone performance gaps segment
+deep dive analysis units risks opportunities MD&A tone analysis evaluate tone shifts
+hedging confidence signals red flags investment implications actionable considerations
+portfolio managers analysts response style guidelines prioritize depth brevity
+actionability support insights evidence highlight overlooked maintain professional
+objective language.
 """
 
-# Mock data for demonstration
 MOCK_SUMMARIES = {
     "annual_report": """
-This annual report presents the financial performance and strategic developments of the company for the fiscal year 2024.
+This annual report presents the financial performance and strategic developments
+of the company for the fiscal year 2024.
 
 Key highlights include:
 - Revenue growth of 12.5% year-over-year, reaching $1.25 billion
@@ -92,9 +86,14 @@ Key highlights include:
 - Reduction in carbon footprint by 15% through sustainability initiatives
 - Strategic acquisition of TechInnovate Inc. for $230 million
 
-The company faced challenges including supply chain disruptions in Q2 and increased regulatory scrutiny in European markets. However, management implemented mitigation strategies including diversification of suppliers and enhanced compliance protocols.
+The company faced challenges including supply chain disruptions in Q2 and
+increased regulatory scrutiny in European markets. However, management implemented
+mitigation strategies including diversification of suppliers and enhanced
+compliance protocols.
 
-The outlook for 2025 remains positive, with projected revenue growth of 8-10% and continued margin expansion through operational efficiencies and strategic pricing initiatives.
+The outlook for 2025 remains positive, with projected revenue growth of 8-10%
+and continued margin expansion through operational efficiencies and strategic
+pricing initiatives.
 """
 }
 
@@ -109,73 +108,510 @@ MOCK_KEY_FIGURES = {
         {"name": "R&D Expenditure", "value": "$78 million", "source_page": 34},
         {"name": "Total Assets", "value": "$3.42 billion", "source_page": 45},
         {"name": "Long-term Debt", "value": "$920 million", "source_page": 47},
-        {"name": "Debt-to-Equity Ratio", "value": "0.68", "source_page": 48}
+        {"name": "Debt-to-Equity Ratio", "value": "0.68", "source_page": 48},
     ]
 }
 
-def process_document_mock(file_path: str) -> Dict[str, Any]:
-    """Process document using mock data."""
-    time.sleep(MOCK_DELAY)  # Simulate processing time
-    
-    doc_type = "annual_report"  # Default type
-    
-    summary = MOCK_SUMMARIES.get(doc_type, MOCK_SUMMARIES["annual_report"])
-    key_figures = MOCK_KEY_FIGURES.get(doc_type, MOCK_KEY_FIGURES["annual_report"])
-    
-    return {
-        "summary": summary,
-        "key_figures": key_figures,
-        "vector_db_path": os.path.join("/data/vector_db", os.path.basename(file_path))
-    }
 
-def ask_question_mock(document_id: str, question: str) -> Dict[str, Any]:
-    """Ask a question using mock data."""
-    doc_type = "annual_report"
+# --- Pydantic Models ---
+class LLMMode(str, Enum):
+    """Enumeration for supported LLM operation modes."""
+    MOCK = "mock"
+    OPENAI = "openai"
+    OLLAMA = "ollama"
+    LMSTUDIO = "lmstudio"
 
-    # Determine response based on question content
-    question_lower = question.lower()
-    if "revenue" in question_lower:
-        answer = "Based on the financial report, the total revenue for this quarter was $2.5 million."
-        sources = [{"page": 1, "snippet": "Total revenue: $2.5 million"}]
-    elif "profit" in question_lower or "income" in question_lower:
-        answer = "The net income for the period was $187 million, representing a 15% increase from the previous period."
-        sources = [{"page": 2, "snippet": "Net income: $187 million"}]
-    else:
-        answer = "The information you're looking for isn't explicitly covered in the document. The document primarily focuses on financial performance, strategic initiatives, and market outlook."
-        sources = []
 
-    return {
-        "answer": answer,
-        "sources": sources
-    }
+class LLMStatusResponse(BaseModel):
+    """Response model for service status."""
+    status: str
+    mode: str
+    model: Optional[str]
+    error: Optional[str]
+    base_url: Optional[str] = None
+    provider: Optional[str] = None
+    api_key_status: Optional[str] = None
+
+
+class LLMModeRequest(BaseModel):
+    """Request model for updating LLM configuration."""
+    mode: str
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+# --- OpenTelemetry & Logging Setup ---
+class LogToSpanHandler(logging.Handler):
+    """
+    Custom Logging Handler to send Python logs to the active Jaeger Span.
+
+    This handler intercepts log records and attaches them as 'Events' to the
+    current OpenTelemetry span, ensuring logs appear in the Jaeger trace timeline.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            current_span = trace.get_current_span()
+            if current_span and current_span.is_recording():
+                current_span.add_event(
+                    name=record.getMessage(),
+                    attributes={
+                        "log.severity": record.levelname,
+                        "log.logger": record.name,
+                        "log.file": record.filename,
+                        "log.line": record.lineno,
+                    },
+                )
+        except Exception:
+            # Prevent logging errors from crashing the application
+            pass
+
+
+def setup_opentelemetry(app: FastAPI) -> TracerProvider:
+    """
+    Configure OpenTelemetry for the FastAPI application.
+
+    Sets up the tracer provider, configures the OTLP exporter to send traces
+    to Jaeger, and instruments the FastAPI app.
+
+    Args:
+        app: The FastAPI application instance.
+
+    Returns:
+        The configured TracerProvider.
+    """
+    # 1. Define Resource (Service Name in Jaeger)
+    resource = Resource.create({"service.name": "llm-service"})
+
+    # 2. Configure Tracer Provider
+    tracer_provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(tracer_provider)
+
+    # 3. Configure Exporter (Points to Jaeger via OTLP gRPC)
+    # Ensure Jaeger has OTLP enabled (ports 4317/4318)
+    otlp_exporter = OTLPSpanExporter(endpoint=JAEGER_ENDPOINT, insecure=True)
+    tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+
+    # 4. Instrument FastAPI
+    FastAPIInstrumentor.instrument_app(app)
+
+    return tracer_provider
+
+
+# --- Initialization ---
+app = FastAPI(title="LLM Service", version="1.0.0", root_path="/llm")
+
+# Apply OpenTelemetry Setup
+setup_opentelemetry(app)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict to actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize logging with standard config and custom Jaeger handler
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Attach custom handler to root logger to capture all logs (including libraries)
+root_logger = logging.getLogger()
+root_logger.addHandler(LogToSpanHandler())
+
+
+# --- Helper Functions ---
+def extract_text_from_document(file_path: str) -> str:
+    """
+    Extract text content from a given file path.
+
+    Supports .txt, .md, and .pdf files.
+
+    Args:
+        file_path: Absolute path to the file.
+
+    Returns:
+        Extracted text as a string.
+    """
+    try:
+        if file_path.endswith((".txt", ".md")):
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        elif file_path.endswith(".pdf"):
+            import fitz  # PyMuPDF
+
+            logger.info(f"Extracting text from PDF: {file_path}")
+            text_content = []
+
+            # Open the PDF document
+            with fitz.open(file_path) as doc:
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    text = page.get_text()
+
+                    if text.strip():
+                        text_content.append(f"--- Page {page_num + 1} ---\n{text}")
+
+            full_text = "\n\n".join(text_content)
+
+            if not full_text.strip():
+                logger.warning(f"No text extracted from PDF: {file_path}")
+                return "No readable text found in this PDF document."
+
+            logger.info(f"Successfully extracted {len(full_text)} chars from PDF")
+            return full_text
+
+        else:
+            logger.warning(f"Unsupported file type: {file_path}")
+            return "This file type is not supported for text extraction."
+
+    except Exception as e:
+        logger.error(f"Error extracting text from document {file_path}: {e}")
+        return f"Error extracting text: {str(e)}"
+
 
 def remove_thinking_tags(text: str) -> str:
     """
-    Remove thinking sections from LLM responses (for models like DeepSeek R1).
+    Remove <think> tags from LLM responses (e.g., DeepSeek R1).
 
     Args:
-        text: The raw LLM response text
+        text: The raw LLM response string.
 
     Returns:
-        The text with thinking sections removed
+        Cleaned text string.
     """
     if not text:
         return text
 
-    # Remove
+    # Remove <think>...</think> sections
+    cleaned_text = re.sub(
+        r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE
+    )
+
+    # Clean up whitespace
+    cleaned_text = re.sub(r"\n\s*\n\s*\n", "\n\n", cleaned_text)
+    return cleaned_text.strip()
+
+
+def ask_question_openai(vector_db_path: str, question: str) -> Dict[str, Any]:
+    """
+    Query the vector database and answer a question using OpenAI/compatible API.
+
+    Args:
+        vector_db_path: Path to the FAISS index directory.
+        question: User's question.
+
+    Returns:
+        Dictionary containing the answer and source snippets.
+    """
+    try:
+        embeddings_path = os.path.join(vector_db_path, "index.faiss")
+
+        if not os.path.exists(embeddings_path):
+            logger.error(f"Vector database not found at {embeddings_path}")
+            return {"answer": "Vector database not found", "sources": []}
+
+        # Load embeddings
+        embeddings = OpenAIEmbeddings()
+        db = FAISS.load_local(
+            vector_db_path, embeddings, allow_dangerous_deserialization=True
+        )
+
+        # Perform similarity search
+        relevant_docs = db.similarity_search(question, k=3)
+
+        context_parts = []
+        sources = []
+
+        for i, doc in enumerate(relevant_docs):
+            content = doc.page_content
+            context_parts.append(f"Relevant section {i+1}:\n{content}")
+            sources.append(
+                {
+                    "page": doc.metadata.get("page", 1),
+                    "snippet": (
+                        content[:200] + "..." if len(content) > 200 else content
+                    ),
+                }
+            )
+
+        context = "\n\n".join(context_parts)
+        prompt_text = f"""
+        {FINANCIAL_ANALYST_SYSTEM_PROMPT}
+
+        Context information from the financial document:
+        {context}
+
+        Question: {question}
+
+        Please provide a detailed answer based on the context information.
+        If the answer is not in the context, say so.
+        """
+
+        # Configure Chat Model
+        api_key = OPENAI_API_KEY if OPENAI_API_KEY != "none" else "lm-studio"
+        base_url = (
+            OPENAI_BASE_URL
+            if OPENAI_BASE_URL != "https://api.openai.com/v1"
+            else None
+        )
+
+        chat = ChatOpenAI(
+            model=OPENAI_MODEL,
+            openai_api_base=base_url,
+            openai_api_key=api_key,
+            max_tokens=2000,
+            temperature=0.3,
+            request_timeout=300,
+        )
+
+        logger.info(f"Calling OpenAI-compatible API with model: {OPENAI_MODEL}")
+
+        messages = [
+            SystemMessage(content=FINANCIAL_ANALYST_SYSTEM_PROMPT),
+            HumanMessage(content=prompt_text),
+        ]
+
+        response = chat(messages)
+        content = remove_thinking_tags(response.content)
+
+        return {"answer": content, "sources": sources}
+
+    except Exception as e:
+        logger.error(f"Error asking question with OpenAI: {e}")
+        return {"answer": f"Error: {str(e)}", "sources": []}
+
+
+def process_document_openai(file_path: str) -> Dict[str, Any]:
+    """
+    Process a document: extract text, embed, save to vector DB, and summarize.
+
+    Args:
+        file_path: Path to the document.
+
+    Returns:
+        Dictionary with summary, key figures, and vector DB path.
+    """
+    try:
+        text = extract_text_from_document(file_path)
+        if not text:
+            return {"error": "Failed to extract text from document"}
+
+        # Chunk text
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, chunk_overlap=100
+        )
+        chunks = text_splitter.split_text(text)
+
+        documents = []
+        for i, chunk in enumerate(chunks):
+            doc = LangchainDocument(
+                page_content=chunk,
+                metadata={
+                    "source": file_path,
+                    "chunk_id": i,
+                    "page": i + 1,
+                },
+            )
+            documents.append(doc)
+
+        # Create/Save Vector DB
+        embeddings = OpenAIEmbeddings()
+        db = FAISS.from_documents(documents, embeddings)
+
+        document_id = os.path.basename(os.path.dirname(file_path))
+        vector_db_path = os.path.join("/data/vector_db", document_id)
+        os.makedirs(vector_db_path, exist_ok=True)
+        db.save_local(vector_db_path)
+
+        # Configure Chat Model for summarization
+        api_key = OPENAI_API_KEY if OPENAI_API_KEY != "none" else "lm-studio"
+        base_url = (
+            OPENAI_BASE_URL
+            if OPENAI_BASE_URL != "https://api.openai.com/v1"
+            else None
+        )
+
+        chat = ChatOpenAI(
+            model=OPENAI_MODEL,
+            openai_api_base=base_url,
+            openai_api_key=api_key,
+            max_tokens=2000,
+            temperature=0.3,
+            request_timeout=300,
+        )
+
+        # Generate Summary
+        summary_prompt = f"""
+        {FINANCIAL_ANALYST_SYSTEM_PROMPT}
+
+        Please analyze the following financial document and provide a
+        comprehensive summary:
+
+        {text[:50000]}
+
+        Include:
+        1. Key financial highlights
+        2. Important trends
+        3. Potential risks or opportunities
+        4. Management's outlook
+        """
+        summary_response = chat(
+            [
+                SystemMessage(content=FINANCIAL_ANALYST_SYSTEM_PROMPT),
+                HumanMessage(content=summary_prompt),
+            ]
+        )
+        summary = remove_thinking_tags(summary_response.content)
+
+        # Extract Key Figures
+        figures_prompt = f"""
+        {FINANCIAL_ANALYST_SYSTEM_PROMPT}
+
+        Extract key financial figures from the document:
+
+        {text[:50000]}
+
+        Return ONLY a JSON array of objects with keys:
+        "name", "value", "source_page".
+        """
+        figures_response = chat(
+            [
+                SystemMessage(content=FINANCIAL_ANALYST_SYSTEM_PROMPT),
+                HumanMessage(content=figures_prompt),
+            ]
+        )
+        figures_content = remove_thinking_tags(figures_response.content)
+
+        # Parse JSON response
+        try:
+            json_match = re.search(r"\[.*\]", figures_content, re.DOTALL)
+            if json_match:
+                key_figures = json.loads(json_match.group(0))
+            else:
+                raise ValueError("No JSON found")
+        except Exception:
+            key_figures = [
+                {
+                    "name": "Revenue",
+                    "value": "Not found",
+                    "source_page": None,
+                }
+            ]
+
+        return {
+            "summary": summary,
+            "key_figures": key_figures,
+            "vector_db_path": vector_db_path,
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing document with OpenAI: {e}")
+        return {"error": str(e)}
+
+
+def process_document_mock(file_path: str) -> Dict[str, Any]:
+    """Simulate document processing with mock data."""
+    time.sleep(MOCK_DELAY)
+    doc_type = "annual_report"
+
+    summary = MOCK_SUMMARIES.get(doc_type, MOCK_SUMMARIES["annual_report"])
+    key_figures = MOCK_KEY_FIGURES.get(doc_type, MOCK_KEY_FIGURES["annual_report"])
+
+    document_id = os.path.basename(os.path.dirname(file_path))
+    vector_db_path = os.path.join("/data/vector_db", document_id)
+    os.makedirs(vector_db_path, exist_ok=True)
+
+    # Create mock artifacts
+    with open(os.path.join(vector_db_path, "index.faiss"), "w") as f:
+        f.write("MOCK_FAISS_INDEX")
+    with open(os.path.join(vector_db_path, "documents.pkl"), "wb") as f:
+        pickle.dump(
+            [
+                LangchainDocument(
+                    page_content="Mock content", metadata={"page": 1}
+                )
+            ],
+            f,
+        )
+
+    return {
+        "summary": summary,
+        "key_figures": key_figures,
+        "vector_db_path": vector_db_path,
+    }
+
+
+def ask_question_mock(document_id: str, question: str) -> Dict[str, Any]:
+    """Simulate Q&A with mock data."""
+    question_lower = question.lower()
+    if "revenue" in question_lower:
+        answer = "Total revenue was $2.5 million."
+        sources = [{"page": 1, "snippet": "Total revenue: $2.5 million"}]
+    elif "profit" in question_lower or "income" in question_lower:
+        answer = "Net income was $187 million."
+        sources = [{"page": 2, "snippet": "Net income: $187 million"}]
+    else:
+        answer = "Information not explicitly found in mock data."
+        sources = []
+
+    return {"answer": answer, "sources": sources}
+
+
+# --- API Endpoints ---
+@app.get("/")
+def read_root():
+    """Root endpoint for health checking."""
+    return {"service": "llm-service", "status": "running"}
+
+
+@app.get("/status", response_model=LLMStatusResponse)
+def get_llm_status():
+    """Retrieve current LLM service status and configuration."""
+    status = {
+        "status": "available",
+        "mode": LLM_MODE,
+        "model": None,
+        "error": None,
+    }
+
+    if LLM_MODE == "mock":
+        status["model"] = "mock"
+    elif LLM_MODE == "openai":
+        status["model"] = OPENAI_MODEL
+        status["base_url"] = OPENAI_BASE_URL
+        status["provider"] = "OpenAI-compatible (LM Studio)"
+    elif LLM_MODE == "ollama":
+        status["model"] = os.environ.get("OLLAMA_MODEL", "llama2")
+        status["provider"] = "Ollama"
+    else:
+        status["status"] = "error"
+        status["error"] = f"Unknown LLM mode: {LLM_MODE}"
+
+    return status
+
+
+@app.post("/mode", response_model=LLMStatusResponse)
 def set_llm_mode(request: LLMModeRequest):
+    """
+    Update the active LLM mode and configuration.
+
+    Args:
+        request: Configuration details (mode, api_key, model, etc.).
+    """
     global LLM_MODE, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL
-    
+
     if request.mode not in ["mock", "openai", "ollama"]:
         return {
             "status": "error",
-            "message": f"Invalid LLM mode: {request.mode}. Must be one of: mock, openai, ollama"
+            "message": f"Invalid mode: {request.mode}",
         }
 
-    # Update mode
     LLM_MODE = request.mode
 
-    # Update API key, model, and base URL if provided
     if request.mode == "openai":
         if request.api_key:
             OPENAI_API_KEY = request.api_key
@@ -189,45 +625,233 @@ def set_llm_mode(request: LLMModeRequest):
     return {
         "status": "success",
         "message": f"LLM mode set to {LLM_MODE}",
-        "llm_status": get_llm_status()
+        "llm_status": get_llm_status(),
     }
 
+
 @app.post("/process")
-def process_document(request: Request):
-    # This endpoint would receive a file path and perform document analysis
-    # In a real implementation, it would call the appropriate LLM backend
-    file_path = request.query_params.get("file_path", "")
-    
+def process_document(file_path: str = Query(..., description="Path to file")):
+    """
+    Process a document to generate summary and vector embeddings.
+
+    Args:
+        file_path: Absolute path to the document to process.
+    """
     if LLM_MODE == "mock":
         result = process_document_mock(file_path)
+    elif LLM_MODE == "openai":
+        result = process_document_openai(file_path)
     else:
-        # In a real implementation, this would call the actual LLM
         result = {
-            "summary": "Document processed successfully",
+            "summary": "Document processed (Ollama/Other not implemented)",
             "key_figures": [],
-            "vector_db_path": ""
+            "vector_db_path": "",
         }
-    
+
     return result
 
+
 @app.post("/ask")
-def ask_question(request: Request):
-    # This endpoint would receive a document ID and question
-    # In a real implementation, it would call the appropriate LLM backend
-    document_id = request.query_params.get("document_id", "")
-    question = request.query_params.get("question", "")
-    
+def ask_question(
+    document_id: str = Query(..., description="ID of the document"),
+    question: str = Query(..., description="Question to ask"),
+):
+    """
+    Ask a question about a processed document.
+
+    Args:
+        document_id: The ID of the document (folder name in vector DB).
+        question: The user's natural language question.
+    """
     if LLM_MODE == "mock":
         result = ask_question_mock(document_id, question)
+    elif LLM_MODE == "openai":
+        vector_db_path = f"/data/vector_db/{document_id}"
+        result = ask_question_openai(vector_db_path, question)
     else:
-        # In a real implementation, this would call the actual LLM
         result = {
-            "answer": "This is a sample answer from the LLM service.",
-            "sources": []
+            "answer": "This is a placeholder answer.",
+            "sources": [],
         }
-    
+
     return result
+
+
+@app.get("/admin/config")
+def get_llm_config_admin():
+    """Retrieve current LLM configuration (Admin only)."""
+    current_config = {
+        "vendor": os.environ.get("LLM_MODE", "openai"),
+        "api_key": os.environ.get("OPENAI_API_KEY", "lm-studio"),
+        "base_url": os.environ.get(
+            "OPENAI_BASE_URL", "http://host.docker.internal:1234/v1"
+        ),
+        "model": os.environ.get(
+            "OPENAI_MODEL", "mistralai/magistral-small-2509"
+        ),
+    }
+
+    return {
+        "current_vendor": current_config["vendor"],
+        "current_model": current_config["model"],
+        "current_config": current_config,
+        "available_vendors": ["openai", "ollama", "mock"],
+        "vendor_models": {
+            "openai": [
+                "gpt-4",
+                "gpt-3.5-turbo",
+                "mistralai/magistral-small-2509",
+            ],
+            "ollama": ["llama2", "mistral", "codellama", "gemma"],
+            "mock": ["mock"],
+        },
+        "status": "success",
+    }
+
+
+@app.post("/admin/config")
+def update_llm_config_admin(request: LLMModeRequest):
+    """Update LLM configuration (Admin only)."""
+    global LLM_MODE, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL
+
+    LLM_MODE = request.mode
+
+    if request.mode == "openai":
+        if request.api_key:
+            OPENAI_API_KEY = request.api_key
+        if request.model:
+            OPENAI_MODEL = request.model
+        if request.base_url:
+            OPENAI_BASE_URL = request.base_url
+    elif request.mode == "ollama" and request.model:
+        os.environ["OLLAMA_MODEL"] = request.model
+
+    return {
+        "message": "LLM configuration updated successfully",
+        "config": {
+            "vendor": LLM_MODE,
+            "model": (
+                OPENAI_MODEL
+                if LLM_MODE == "openai"
+                else os.environ.get("OLLAMA_MODEL", "llama2")
+            ),
+            "base_url": OPENAI_BASE_URL if LLM_MODE == "openai" else None,
+        },
+    }
+
+
+@app.get("/admin/vendors")
+def get_llm_vendors_admin():
+    """Get available LLM vendors (Admin only)."""
+    return {
+        "vendors": {
+            "openai": {
+                "name": "OpenAI Compatible",
+                "description": "OpenAI API compatible services",
+                "default_models": [
+                    "gpt-4",
+                    "gpt-3.5-turbo",
+                    "mistralai/magistral-small-2509",
+                ],
+            },
+            "ollama": {
+                "name": "Ollama",
+                "description": "Ollama local models",
+                "default_models": ["llama2", "mistral", "codellama"],
+            },
+            "mock": {
+                "name": "Mock Service",
+                "description": "Simulated responses for testing",
+                "default_models": ["mock-model"],
+            },
+        }
+    }
+
+
+@app.get("/admin/models/{vendor}")
+def get_vendor_models_admin(
+    vendor: str, base_url: str = None, api_key: str = None
+):
+    """Get available models for a specific vendor."""
+    if vendor == "openai":
+        return {
+            "vendor": vendor,
+            "models": [
+                "gpt-4",
+                "gpt-3.5-turbo",
+                "mistralai/magistral-small-2509",
+            ],
+        }
+    elif vendor == "ollama":
+        return {
+            "vendor": vendor,
+            "models": ["llama2", "mistral", "codellama", "gemma"],
+        }
+    elif vendor == "mock":
+        return {"vendor": vendor, "models": ["mock-model"]}
+    else:
+        return {
+            "vendor": vendor,
+            "models": [],
+            "error": f"Unsupported vendor: {vendor}",
+        }
+
+
+@app.post("/admin/test")
+def test_llm_config_admin(request: LLMModeRequest):
+    """Test LLM configuration connection (Admin only)."""
+    try:
+        if request.mode == "mock":
+            return {"success": True, "message": "Mock mode works fine"}
+        elif request.mode == "openai":
+            # Test the API connection
+            response = requests.get(
+                f"{request.base_url}/models",
+                headers={"Authorization": f"Bearer {request.api_key}"},
+            )
+            if response.status_code == 200:
+                return {
+                    "success": True,
+                    "message": "OpenAI-compatible API test successful",
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"API test failed: {response.status_code}",
+                }
+        elif request.mode == "ollama":
+            # Test if Ollama is running
+            response = requests.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                return {
+                    "success": True,
+                    "message": "Ollama connection test successful",
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Ollama test failed: {response.status_code}",
+                }
+    except Exception as e:
+        return {"success": False, "message": f"Connection test failed: {str(e)}"}
+
+
+@app.post("/admin/clear-all-cache")
+def clear_all_cache():
+    """Clear all cached data."""
+    cache_path = "/data/cache"
+    if os.path.exists(cache_path):
+        shutil.rmtree(cache_path)
+        os.makedirs(cache_path, exist_ok=True)
+
+    return {"message": "All cache cleared successfully"}
+
 
 @app.get("/health")
 def health_check():
+    """Simple health check endpoint."""
     return {"status": "healthy", "service": "llm-service"}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8003)

@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Typography, Box, Divider, useTheme, alpha } from '@mui/material';
 import { styled } from '@mui/material/styles';
 
@@ -135,9 +136,9 @@ const StyledMarkdownContainer = styled(Box)(({ theme }) => ({
   },
 }));
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ 
-  content, 
-  variant = 'body1' 
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+  content,
+  variant = 'body1'
 }) => {
   const theme = useTheme();
 
@@ -152,6 +153,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   return (
     <StyledMarkdownContainer>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           // Custom component for paragraphs to use Material-UI Typography
           p: ({ children }) => (

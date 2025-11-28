@@ -52,6 +52,8 @@ export interface Document {
   updated_at: string;
   owner_id?: number;
   analysis_results?: AnalysisResults;
+  error_message?: string;
+  processing_step?: string;
 }
 
 export interface AnalysisResults {

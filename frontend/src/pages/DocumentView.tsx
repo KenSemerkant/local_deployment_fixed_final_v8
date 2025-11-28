@@ -57,7 +57,7 @@ function TabPanel(props: TabPanelProps) {
 const DocumentView: React.FC = () => {
   const { documentId } = useParams<{ documentId: string }>();
   const navigate = useNavigate();
-  
+
   const [document, setDocument] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -159,7 +159,7 @@ const DocumentView: React.FC = () => {
 
   const handleExport = async (format: 'txt' | 'csv') => {
     if (!documentId) return;
-    
+
     try {
       const response = await documentService.exportDocument(documentId, format);
       window.open(response.export_url, '_blank');
@@ -184,8 +184,8 @@ const DocumentView: React.FC = () => {
       <Container maxWidth="lg">
         <Box sx={{ mt: 4, mb: 4 }}>
           <Alert severity="error">{error}</Alert>
-          <Button 
-            startIcon={<ArrowBackIcon />} 
+          <Button
+            startIcon={<ArrowBackIcon />}
             onClick={() => navigate('/dashboard')}
             sx={{ mt: 2 }}
           >
@@ -201,8 +201,8 @@ const DocumentView: React.FC = () => {
       <Container maxWidth="lg">
         <Box sx={{ mt: 4, mb: 4 }}>
           <Alert severity="warning">Document not found</Alert>
-          <Button 
-            startIcon={<ArrowBackIcon />} 
+          <Button
+            startIcon={<ArrowBackIcon />}
             onClick={() => navigate('/dashboard')}
             sx={{ mt: 2 }}
           >
@@ -266,8 +266,8 @@ const DocumentView: React.FC = () => {
               label={document.status}
               color={
                 document.status === 'COMPLETED' ? 'success' :
-                document.status === 'ERROR' ? 'error' :
-                document.status === 'CANCELLED' ? 'warning' : 'info'
+                  document.status === 'ERROR' ? 'error' :
+                    document.status === 'CANCELLED' ? 'warning' : 'info'
               }
               size="small"
             />
@@ -280,7 +280,10 @@ const DocumentView: React.FC = () => {
             <Typography variant="h6">
               Processing Document
             </Typography>
-            <Typography variant="body1" color="text.secondary">
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
+              {document.processing_step || 'Initializing processing...'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
               This may take a few minutes depending on the document size.
             </Typography>
           </Paper>
@@ -292,7 +295,7 @@ const DocumentView: React.FC = () => {
               Error processing document
             </Typography>
             <Typography variant="body2">
-              {document.analysis_results?.error || 'An unknown error occurred during document processing.'}
+              {document.error_message || document.analysis_results?.error || 'An unknown error occurred during document processing.'}
             </Typography>
           </Alert>
         )}
@@ -311,8 +314,8 @@ const DocumentView: React.FC = () => {
         {!isProcessing && !hasError && !isCancelled && (
           <>
             <Paper elevation={1} sx={{ mb: 3 }}>
-              <Tabs 
-                value={tabValue} 
+              <Tabs
+                value={tabValue}
                 onChange={handleTabChange}
                 variant="fullWidth"
               >

@@ -1,15 +1,17 @@
-FROM nginx:alpine
+# Gateway service Dockerfile
+FROM python:3.9-slim
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY default.conf /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-# Create directory for frontend build
-RUN mkdir -p /usr/share/nginx/html
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy frontend build files to nginx directory
-COPY build/ /usr/share/nginx/html/
+# Copy application code
+COPY *.py ./
 
-EXPOSE 80 8000
+# Expose port
+EXPOSE 8000
 
-CMD ["nginx", "-g", "daemon off;"]
+# Run the application
+CMD ["python", "main.py"]

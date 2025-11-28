@@ -54,6 +54,8 @@ interface LLMConfig {
   api_key?: string;
   base_url?: string;
   model?: string;
+  embedding_model?: string;
+  embedding_base_url?: string;
   temperature: number;
   max_tokens: number;
   timeout: number;
@@ -75,18 +77,20 @@ const LLMConfiguration: React.FC = () => {
     api_key: '',
     base_url: '',
     model: '',
+    embedding_model: '',
+    embedding_base_url: '',
     temperature: 0.3,
     max_tokens: 2000,
     timeout: 300
   });
-  
+
   const [vendors, setVendors] = useState<Record<string, LLMVendor>>({});
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
-  
+
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
@@ -110,9 +114,9 @@ const LLMConfiguration: React.FC = () => {
     try {
       const response = await axios.get(`${API_URL}/admin/llm/config`);
       const data: LLMConfigResponse = response.data;
-      
+
       setConfig(data.current_config);
-      
+
       if (data.error) {
         showSnackbar(data.error, 'error');
       }
@@ -147,7 +151,7 @@ const LLMConfiguration: React.FC = () => {
 
       const response = await axios.get(`${API_URL}/admin/llm/models/${vendor}`, { params });
       setAvailableModels(response.data.models || []);
-      
+
       if (response.data.error) {
         showSnackbar(`Warning: ${response.data.error}`, 'info');
       }
@@ -183,7 +187,8 @@ const LLMConfiguration: React.FC = () => {
         vendor,
         base_url: vendorInfo.default_base_url || '',
         model: vendorInfo.default_models[0] || '',
-        api_key: vendorInfo.requires_api_key ? config.api_key : ''
+        api_key: vendorInfo.requires_api_key ? config.api_key : '',
+        embedding_model: ''  // Reset embedding model on vendor change
       });
     }
   };
@@ -206,11 +211,11 @@ const LLMConfiguration: React.FC = () => {
     try {
       setTesting(true);
       const response = await axios.post(`${API_URL}/admin/llm/test`, config);
-      
+
       if (response.data.success) {
         showSnackbar('Connection test successful!', 'success');
       } else {
-        showSnackbar(`Connection test failed: ${response.data.error}`, 'error');
+        showSnackbar(`Connection test failed: ${response.data.message || response.data.error || 'Unknown error'}`, 'error');
       }
     } catch (error: any) {
       console.error('Error testing configuration:', error);
@@ -253,7 +258,7 @@ const LLMConfiguration: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               Provider Configuration
             </Typography>
-            
+
             {/* Vendor Selection */}
             <FormControl fullWidth margin="normal">
               <InputLabel>LLM Provider</InputLabel>
@@ -375,6 +380,41 @@ const LLMConfiguration: React.FC = () => {
                       helperText="Request timeout"
                     />
                   </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <FormControl fullWidth>
+                        <InputLabel>Embedding Model</InputLabel>
+                        <Select
+                          value={config.embedding_model || ''}
+                          onChange={(e) => handleConfigChange('embedding_model', e.target.value)}
+                          label="Embedding Model"
+                        >
+                          {availableModels.map((model) => (
+                            <MenuItem key={model} value={model}>
+                              {model}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <Button
+                        variant="outlined"
+                        onClick={() => loadModelsForVendor(config.vendor)}
+                        disabled={refreshingModels}
+                        sx={{ minWidth: 'auto', p: 1 }}
+                      >
+                        {refreshingModels ? <CircularProgress size={20} /> : <RefreshIcon />}
+                      </Button>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Embedding Base URL"
+                      value={config.embedding_base_url || ''}
+                      onChange={(e) => handleConfigChange('embedding_base_url', e.target.value)}
+                      helperText="Base URL for embedding service if different from LLM (e.g., for local embedding servers)"
+                    />
+                  </Grid>
                 </Grid>
               </AccordionDetails>
             </Accordion>
@@ -425,6 +465,15 @@ const LLMConfiguration: React.FC = () => {
                 <ListItemText
                   primary="Model"
                   secondary={config.model || 'Not selected'}
+                />
+              </ListItem>
+              <ListItem>
+                <ListItemIcon>
+                  <InfoIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Embedding Model"
+                  secondary={config.embedding_model || 'Not configured'}
                 />
               </ListItem>
               <ListItem>

@@ -467,10 +467,10 @@ const Dashboard: React.FC = () => {
                                   doc.status.toUpperCase() === 'COMPLETED' || doc.status.toUpperCase() === 'PROCESSED'
                                     ? 'success'
                                     : doc.status.toUpperCase() === 'PROCESSING' || doc.status.toUpperCase() === 'UPLOADED'
-                                    ? 'info'
-                                    : doc.status.toUpperCase() === 'ERROR'
-                                    ? 'error'
-                                    : 'warning'
+                                      ? 'info'
+                                      : doc.status.toUpperCase() === 'ERROR'
+                                        ? 'error'
+                                        : 'warning'
                                 }
                                 sx={{
                                   fontWeight: 600,
@@ -494,7 +494,7 @@ const Dashboard: React.FC = () => {
                                   }}
                                 />
                                 <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                                  Processing document...
+                                  {doc.processing_step || 'Processing document...'}
                                 </Typography>
                               </Box>
                             )}

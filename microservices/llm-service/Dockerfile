@@ -15,7 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create data directories
-RUN mkdir -p /data/vector_db /data/cache
+RUN mkdir -p /data/vector_db /data/cache && \
+    mkdir -p /tmp && \
+    chmod 777 /tmp
 
 EXPOSE 8003
 

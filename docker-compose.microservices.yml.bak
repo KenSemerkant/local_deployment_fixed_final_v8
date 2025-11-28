@@ -118,10 +118,9 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-
   # Storage Management Service
-  storage-service:
-    build:
+storage-service:
+build:
       context: ./microservices/storage-service
       dockerfile: Dockerfile
     expose:
@@ -170,15 +169,13 @@ services:
       - app-network
     restart: unless-stopped
 
-  # Jaeger tracing service (v2)
+# Jaeger tracing service
   jaeger:
-    image: jaegertracing/jaeger:latest
+    image: jaegertracing/all-in-one:latest
     ports:
       - "16686:16686"  # Web UI
       - "4317:4317"    # OTLP gRPC receiver
       - "4318:4318"    # OTLP HTTP receiver
-      - "5778:5778"    # HTTP port for sampling strategies and baggage restrictions
-      - "9411:9411"    # Zipkin compatible port
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     networks:
