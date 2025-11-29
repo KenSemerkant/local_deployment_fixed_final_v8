@@ -297,8 +297,8 @@ async def forward_request(service_name: str, path: str, original_request: Reques
     params = dict(original_request.query_params)
     
     try:
-        # Make the request to the target service
-        response = await http_client.request(
+        # Create a client request
+        req = http_client.build_request(
             method=original_request.method,
             url=target_url,
             headers=headers,
@@ -306,19 +306,37 @@ async def forward_request(service_name: str, path: str, original_request: Reques
             content=body
         )
         
+        # Send the request and stream the response
+        r = await http_client.send(req, stream=True)
+        
         # Check if the response is a file download or binary content
-        content_type = response.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            from fastapi.responses import Response
-            return Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=content_type
-            )
+        content_type = r.headers.get("content-type", "")
+        
+        # Filter headers to avoid duplicates and issues
+        excluded_headers = {
+            "content-encoding", "content-length", "transfer-encoding", 
+            "connection", "date", "server", "host", "access-control-allow-origin", "access-control-expose-headers"
+        }
+        filtered_headers = {
+            k: v for k, v in r.headers.items() 
+            if k.lower() not in excluded_headers
+        }
+        
+        # Explicitly add CORS headers
+        filtered_headers["Access-Control-Allow-Origin"] = "*"
+        filtered_headers["Access-Control-Expose-Headers"] = "Content-Disposition"
 
-        # Return the response from the target service
-        return response.json()
+        from fastapi.responses import StreamingResponse
+        from starlette.background import BackgroundTask
+        
+        return StreamingResponse(
+            r.aiter_bytes(),
+            status_code=r.status_code,
+            headers=filtered_headers,
+            media_type=content_type,
+            background=BackgroundTask(r.aclose)
+        )
+
     except httpx.RequestError as e:
         logger.error(f"Request to {target_url} failed: {e}")
         raise HTTPException(status_code=502, detail=f"Service {service_name} unavailable")

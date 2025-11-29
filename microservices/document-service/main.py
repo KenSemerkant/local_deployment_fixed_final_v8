@@ -756,9 +756,9 @@ def download_document(document_id: int):
         return FileResponse(
             temp_file_path,
             filename=filename,
-            media_type=document["mime_type"],
+            media_type='application/pdf',
             headers={
-                "Content-Disposition": f"attachment; filename={filename}"
+                "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
     except Exception as e:
