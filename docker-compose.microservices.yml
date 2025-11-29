@@ -88,6 +88,7 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://host.docker.internal:1234/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-lm-studio}
       - OPENAI_MODEL=${OPENAI_MODEL:-mistralai/magistral-small-2509}
+      - REDIS_URL=redis://redis:6379/0
       - STORAGE_PATH=/data
       - ENABLE_CACHING=${ENABLE_CACHING:-true}
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
@@ -96,6 +97,17 @@ services:
       - llm_data:/data
     depends_on:
       - jaeger
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Redis Service for KV Store
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
     networks:
       - app-network
     restart: unless-stopped
@@ -174,11 +186,11 @@ services:
   jaeger:
     image: jaegertracing/jaeger:latest
     ports:
-      - "16686:16686"  # Web UI
-      - "4317:4317"    # OTLP gRPC receiver
-      - "4318:4318"    # OTLP HTTP receiver
-      - "5778:5778"    # HTTP port for sampling strategies and baggage restrictions
-      - "9411:9411"    # Zipkin compatible port
+      - "16686:16686" # Web UI
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+      - "5778:5778" # HTTP port for sampling strategies and baggage restrictions
+      - "9411:9411" # Zipkin compatible port
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     networks:
@@ -196,3 +208,4 @@ volumes:
   analytics_data:
   storage_data:
   minio_data:
+  redis_data:

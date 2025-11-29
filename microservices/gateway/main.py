@@ -108,6 +108,10 @@ async def get_current_user(request: Request):
 async def upload_document(request: Request):
     return await forward_request("document", "/documents", request)
 
+@app.post("/documents/upload-url")
+async def upload_document_from_url(request: Request):
+    return await forward_request("document", "/documents/upload-url", request)
+
 @app.get("/documents")
 async def list_documents(request: Request):
     return await forward_request("document", "/documents", request)
@@ -302,6 +306,17 @@ async def forward_request(service_name: str, path: str, original_request: Reques
             content=body
         )
         
+        # Check if the response is a file download or binary content
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            from fastapi.responses import Response
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=content_type
+            )
+
         # Return the response from the target service
         return response.json()
     except httpx.RequestError as e:

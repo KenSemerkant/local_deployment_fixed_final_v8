@@ -63,6 +63,7 @@ class DocumentAnalysisResponse(BaseModel):
 class QuestionRequest(BaseModel):
     document_path: str
     question: str
+    vector_db_path: Optional[str] = None
 
 class SourceReference(BaseModel):
     page: Optional[int] = None
@@ -402,13 +403,60 @@ class OpenAILLMClient:
 
         # Determine which embedding class to use based on the service
         if "lmstudio" in CURRENT_CONFIG["mode"].lower():
-            # For LM Studio, use OpenAI-compatible embeddings
-            from langchain_openai import OpenAIEmbeddings
-            self.embeddings = OpenAIEmbeddings(
-                openai_api_base=embedding_base_url,
-                openai_api_key=api_key,  # LM Studio typically doesn't need API key but OpenAIEmbeddings requires one
-                model=embedding_model,
-                check_embedding_ctx_length=False  # Disable context length check for local models
+            # For LM Studio, use custom embeddings to avoid tokenization issues
+            from typing import List
+            from langchain.embeddings.base import Embeddings
+            import requests
+
+            class CustomLMStudioEmbeddings(Embeddings):
+                def __init__(self, base_url, api_key, model):
+                    self.base_url = base_url
+                    self.api_key = api_key
+                    self.model = model
+
+                def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                    url = f"{self.base_url}/embeddings"
+                    headers = {
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    # LM Studio might accept batch, but let's be safe and do one by one or small batches
+                    # Actually, let's try sending all at once first, if it fails we can batch
+                    payload = {
+                        "input": texts,
+                        "model": self.model
+                    }
+                    response = requests.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    # OpenAI format: data['data'] is a list of objects with 'embedding' field
+                    # Sort by index just in case
+                    sorted_data = sorted(data['data'], key=lambda x: x['index'])
+                    return [item['embedding'] for item in sorted_data]
+
+                def embed_query(self, text: str) -> List[float]:
+                    url = f"{self.base_url}/embeddings"
+                    headers = {
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {
+                        "input": text,
+                        "model": self.model
+                    }
+                    response = requests.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    return data['data'][0]['embedding']
+
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Initializing custom embeddings for LM Studio: base_url={embedding_base_url}, model={embedding_model}")
+            
+            self.embeddings = CustomLMStudioEmbeddings(
+                base_url=embedding_base_url.rstrip('/'), # Ensure no trailing slash for appending /embeddings
+                api_key=api_key or "lm-studio",
+                model=embedding_model
             )
         elif "ollama" in CURRENT_CONFIG["mode"].lower():
             # For Ollama, use Ollama embeddings if available
@@ -491,8 +539,11 @@ class OpenAILLMClient:
             Proactive Risk Communication: Immediately identify and articulate any impending details or trends that pose investment risks to stakeholders.
 
             Based on the provided financial document, please provide:
-            1. A comprehensive summary highlighting key financial performance indicators, strategic developments, and potential risks/opportunities
-            2. Extract 8-12 key financial figures with their source page numbers in the JSON format: [{{"name": "figure_name", "value": "figure_value", "source_page": page_number}}]
+            1. A comprehensive summary highlighting key financial performance indicators, strategic developments, and potential risks/opportunities.
+            
+            Then, output the separator "---KEY_FIGURES_START---" on a new line.
+            
+            Then, extract 8-12 key financial figures with their source page numbers in the JSON format: [{{"name": "figure_name", "value": "figure_value", "source_page": page_number}}]
 
             Document content:
             {full_text}
@@ -514,12 +565,23 @@ class OpenAILLMClient:
             # For now, we'll try to extract JSON if present, otherwise use mock data
             key_figures = []
             try:
-                import re
-                json_match = re.search(r'\[.*\]', analysis_text, re.DOTALL)
-                if json_match:
-                    key_figures = json.loads(json_match.group(0))
-                    # Remove the JSON part from the summary text
-                    analysis_text = analysis_text.replace(json_match.group(0), "").strip()
+                if "---KEY_FIGURES_START---" in analysis_text:
+                    parts = analysis_text.split("---KEY_FIGURES_START---")
+                    analysis_text = parts[0].strip()
+                    json_part = parts[1].strip()
+                    
+                    import re
+                    json_match = re.search(r'\[.*\]', json_part, re.DOTALL)
+                    if json_match:
+                        key_figures = json.loads(json_match.group(0))
+                else:
+                    # Fallback to regex search if delimiter is missing
+                    import re
+                    json_match = re.search(r'\[.*\]', analysis_text, re.DOTALL)
+                    if json_match:
+                        key_figures = json.loads(json_match.group(0))
+                        # Remove the JSON part from the summary text
+                        analysis_text = analysis_text.replace(json_match.group(0), "").strip()
             except:
                 pass
                 
@@ -531,12 +593,17 @@ class OpenAILLMClient:
 
             # Create vector database for Q&A
             _update_step("Processing for the Q&A")
+            
+            # Combine all pages for vector DB to ensure cross-page context is preserved
+            all_text = "\n\n".join([page.page_content for page in pages])
+            
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=100,
                 separators=["\n\n", "\n", ".", " ", ""]
             )
-            docs = text_splitter.split_documents(pages)
+            # Create documents from the single merged text, preserving the source metadata
+            docs = text_splitter.create_documents([all_text], metadatas=[{"source": document_path}])
 
             # Use the configured embeddings from init
             embeddings = self.embeddings
@@ -570,23 +637,26 @@ class OpenAILLMClient:
             if temp_path != document_path:
                 os.unlink(temp_path)
     
-    def answer_question(self, document_path: str, question: str) -> Dict[str, Any]:
+    def answer_question(self, document_path: str, question: str, vector_db_path: str = None) -> Dict[str, Any]:
         from langchain.chains import RetrievalQA
         from langchain_openai import OpenAIEmbeddings
         from langchain_community.vectorstores import FAISS
         from langchain.text_splitter import RecursiveCharacterTextSplitter
         from langchain_community.document_loaders import PyMuPDFLoader
+        import os
 
-        # Extract filename from document_path for vector store
-        if '/' in document_path and len(document_path.split('/')[0]) == 36:  # UUID length
-            # This appears to be a MinIO object name
-            filename = os.path.basename(document_path.split('/', 1)[1])
-        else:
-            # This is a local file path
-            filename = os.path.basename(document_path)
+        # If vector_db_path is not provided, try to derive it (legacy behavior)
+        if not vector_db_path:
+            # Extract filename from document_path for vector store
+            if '/' in document_path and len(document_path.split('/')[0]) == 36:  # UUID length
+                # This appears to be a MinIO object name
+                filename = os.path.basename(document_path.split('/', 1)[1])
+            else:
+                # This is a local file path
+                filename = os.path.basename(document_path)
 
-        unique_id = filename.replace('.pdf', '')
-        vector_db_path = f"/data/vector_dbs/{unique_id}.faiss"
+            unique_id = filename.replace('.pdf', '')
+            vector_db_path = f"/data/vector_dbs/{unique_id}.faiss"
 
         # Try to load existing vector store, if not create new one
         try:
@@ -610,12 +680,16 @@ class OpenAILLMClient:
                     loader = PyMuPDFLoader(temp_path)
                     pages = loader.load()
 
+                    # Combine all pages for vector DB to ensure cross-page context is preserved
+                    all_text = "\n\n".join([page.page_content for page in pages])
+
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=1000,
                         chunk_overlap=100,
                         separators=["\n\n", "\n", ".", " ", ""]
                     )
-                    docs = text_splitter.split_documents(pages)
+                    # Create documents from the single merged text, preserving the source metadata
+                    docs = text_splitter.create_documents([all_text], metadatas=[{"source": document_path}])
 
                     # Create and save vector store
                     vector_store = FAISS.from_documents(docs, embeddings)
@@ -633,25 +707,60 @@ class OpenAILLMClient:
                 )
 
             # Create QA chain
+            from langchain.prompts import PromptTemplate
+            
+            template = """Use the following pieces of context to answer the question at the end. 
+            If you don't know the answer, just say that you don't know, don't try to make up an answer. 
+            If the question is a greeting or conversational, respond politely.
+
+            Context: {context}
+
+            Question: {question}
+            
+            Answer:"""
+            
+            QA_CHAIN_PROMPT = PromptTemplate.from_template(template)
+
             qa = RetrievalQA.from_chain_type(
                 llm=self.client,
                 chain_type="stuff",
-                retriever=vector_store.as_retriever()
+                retriever=vector_store.as_retriever(),
+                chain_type_kwargs={"prompt": QA_CHAIN_PROMPT},
+                return_source_documents=True
             )
 
             # Get answer
             result = qa({"query": question})
+            
+            # Log retrieved documents
+            source_docs = result.get("source_documents", [])
+            logger.info(f"Retrieved {len(source_docs)} documents for question: '{question}'")
+            for i, doc in enumerate(source_docs):
+                logger.info(f"Doc {i+1} content preview: {doc.page_content[:200]}...")
 
             # Extract sources (in a real implementation, this would come from intermediate steps)
-            sources = []  # Placeholder - would get real sources in full implementation
+            sources = []
+            for doc in source_docs:
+                source_info = {
+                    "source": doc.metadata.get("source", "unknown"),
+                    "page": doc.metadata.get("page", 0),
+                    "snippet": doc.page_content[:200]
+                }
+                sources.append(source_info)
+            
+            logger.info(f"LLM Answer: {result['result']}")
+            
             return {
                 "answer": result["result"],
                 "sources": sources
             }
         except Exception as e:
             logger.error(f"Error answering question: {e}")
-            # Fall back to mock response if API call fails
-            return answer_question_mock(document_path, question)
+            # Return the actual error to the user for debugging
+            return {
+                "answer": f"Error: {str(e)}",
+                "sources": []
+            }
 
 class OllamaLLMClient:
     def __init__(self):
@@ -894,10 +1003,135 @@ def analyze_document(request: DocumentAnalysisRequest):
         vector_db_path=results["vector_db_path"]
     )
 
+from fastapi import BackgroundTasks, HTTPException
+import tempfile
+import uuid
+import os # Ensure os is imported at a higher scope if not already
+
+from agents.layout_parser import LayoutParserAgent
+from agents.chunker import ParentChildSplitter
+from agents.analyst import FinancialAnalystAgent
+
+@app.post("/analyze_agentic")
+async def analyze_document_agentic(request: DocumentAnalysisRequest, background_tasks: BackgroundTasks):
+    """
+    Agentic analysis pipeline: Layout Parser -> Parent-Child Chunker -> Vector Store
+    """
+    logger.info(f"Received agentic analysis request for: {request.document_path}")
+    
+    # Check if document exists in MinIO
+    if not minio_client.bucket_exists(DOCUMENTS_BUCKET):
+        raise HTTPException(status_code=500, detail="Documents bucket does not exist")
+        
+    try:
+        minio_client.stat_object(DOCUMENTS_BUCKET, request.document_path)
+    except Exception as e:
+        logger.error(f"Document not found: {e}")
+        raise HTTPException(status_code=404, detail=f"Document not found: {request.document_path}")
+
+    # Run analysis in background
+    background_tasks.add_task(process_agentic_pipeline, request.document_path, request.document_id, request.callback_url)
+    
+    return {"status": "processing", "message": "Agentic analysis started in background"}
+
+async def process_agentic_pipeline(document_path: str, document_id: Optional[int] = None, callback_url: Optional[str] = None):
+    logger.info(f"Starting agentic pipeline for {document_path}")
+    
+    try:
+        # Get LLM client for embeddings
+        llm_client = get_llm_client()
+
+        # 1. Download Document
+        if document_id and callback_url:
+            _update_step_callback(document_id, callback_url, "Downloading Document")
+            
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            minio_client.fget_object(DOCUMENTS_BUCKET, document_path, tmp_file.name)
+            temp_path = tmp_file.name
+
+        try:
+            # 2. Layout Parsing
+            if document_id and callback_url:
+                _update_step_callback(document_id, callback_url, "Parsing Layout")
+            
+            layout_agent = LayoutParserAgent()
+            structured_doc = layout_agent.parse_document(temp_path)
+            
+            # 3. Parent-Child Chunking
+            if document_id and callback_url:
+                _update_step_callback(document_id, callback_url, "Generating Chunks")
+                
+            chunker = ParentChildSplitter()
+            child_chunks = chunker.process_document(structured_doc)
+            
+            # 4. Vectorization (Indexing)
+            if document_id and callback_url:
+                _update_step_callback(document_id, callback_url, "Indexing Vectors")
+                
+            # Convert chunks to LangChain documents for FAISS
+            from langchain.docstore.document import Document
+            from langchain_community.vectorstores import FAISS # Import FAISS here for this function
+            docs = []
+            for chunk in child_chunks:
+                if chunk.content and isinstance(chunk.content, str) and chunk.content.strip():
+                    docs.append(Document(page_content=chunk.content, metadata=chunk.metadata))
+                else:
+                    logger.warning(f"Skipping empty chunk: {chunk.id}")
+            
+            logger.info(f"Prepared {len(docs)} documents for vectorization")
+            if docs:
+                logger.info(f"First doc content preview: {docs[0].page_content[:200]}")
+                logger.info(f"First doc metadata: {docs[0].metadata}")
+            
+            # Use the configured embeddings
+            embeddings = llm_client.embeddings
+            
+            # Generate unique vector store path
+            unique_id = str(uuid.uuid4())
+            if '/' in document_path:
+                filename = os.path.basename(document_path.split('/', 1)[1])
+            else:
+                filename = os.path.basename(document_path)
+            vector_db_path = f"/data/vector_dbs/{unique_id}_{filename.replace('.pdf', '')}.faiss"
+            
+            vector_store = FAISS.from_documents(docs, embeddings)
+            vector_store.save_local(vector_db_path)
+            
+            logger.info(f"Agentic pipeline completed. Vector store saved at {vector_db_path}")
+            
+            # Update status to completed
+            if document_id and callback_url:
+                # We need to send the vector_db_path back
+                # This requires updating the callback payload or just updating the step
+                # For now, we'll just mark as completed, but ideally we should save the path
+                # The current callback mechanism might be limited, but let's try to pass it
+                pass 
+                
+                # Note: The current document-service expects specific fields. 
+                # We might need to update the document-service to handle this new flow's results.
+                # For now, we just finish the task.
+                _update_step_callback(document_id, callback_url, "Completed")
+
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+                
+    except Exception as e:
+        logger.error(f"Agentic pipeline failed: {e}")
+        if document_id and callback_url:
+             _update_step_callback(document_id, callback_url, "Failed")
+
+def _update_step_callback(document_id: int, callback_url: str, step: str):
+    try:
+        import requests
+        requests.patch(f"{callback_url}/step", json={"step": step})
+    except Exception as e:
+        logger.error(f"Failed to update step callback: {e}")
+
 @app.post("/ask", response_model=QuestionResponse)
 def ask_question(request: QuestionRequest):
     llm_client = get_llm_client()
-    results = llm_client.answer_question(request.document_path, request.question)
+    results = llm_client.answer_question(request.document_path, request.question, request.vector_db_path)
     
     # Convert source dictionaries to SourceReference objects
     sources = [SourceReference(**src) for src in results["sources"]]

@@ -133,6 +133,57 @@ export const documentService = {
     }
   },
 
+  // Download document
+  downloadDocument: async (documentId: string, filename: string): Promise<void> => {
+    console.log(`Downloading document ${documentId}`);
+    try {
+      const response = await api.get(`/documents/${documentId}/download`, {
+        responseType: 'blob',
+      });
+
+      // Check if the response is actually an error (JSON)
+      if (response.data.type === 'application/json') {
+        const text = await response.data.text();
+        const errorData = JSON.parse(text);
+        throw new Error(errorData.detail || 'Download failed');
+      }
+
+      // Create a blob link to download
+      // Explicitly create a new Blob to ensure type is correct
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+
+      // Ensure filename is just the name, not a path
+      let cleanFilename = filename ? filename.split('/').pop()?.split('\\').pop() : 'document.pdf';
+      if (!cleanFilename) cleanFilename = 'document.pdf';
+
+      console.log(`Download filename: ${filename}, Cleaned: ${cleanFilename}`);
+
+      link.setAttribute('download', cleanFilename);
+      link.style.display = 'none'; // Hide the link
+
+      // Append to html link element page
+      document.body.appendChild(link);
+
+      // Start download
+      link.click();
+
+      // Clean up and remove the link with a longer delay
+      setTimeout(() => {
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        console.log('Cleaned up download link');
+      }, 5000); // 5 seconds delay
+
+      console.log(`Document ${documentId} downloaded successfully`);
+    } catch (error) {
+      console.error(`Error downloading document ${documentId}:`, error);
+      throw error;
+    }
+  },
+
   // Upload document
   uploadDocument: async (file: File): Promise<Document> => {
     console.log(`Uploading document: ${file.name}`);
@@ -149,6 +200,19 @@ export const documentService = {
       return response.data;
     } catch (error) {
       console.error('Error uploading document:', error);
+      throw error;
+    }
+  },
+
+  // Upload document from URL
+  uploadFromUrl: async (url: string): Promise<Document> => {
+    console.log(`Uploading document from URL: ${url}`);
+    try {
+      const response = await api.post('/documents/upload-url', { url });
+      console.log('Upload from URL response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error uploading document from URL:', error);
       throw error;
     }
   },

@@ -20,7 +20,10 @@ import {
   Alert,
   Tooltip,
   Chip,
-  LinearProgress
+  LinearProgress,
+  Tabs,
+  Tab,
+  TextField
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -30,7 +33,7 @@ import {
   Cancel as CancelIcon
 } from '@mui/icons-material';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FileText, Eye, Trash2, X, Plus, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, FileText, Eye, Trash2, X, Plus, Clock, CheckCircle, AlertCircle, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { documentService, Document } from '../services/api';
@@ -45,6 +48,7 @@ const Dashboard: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [cancellingDocuments, setCancellingDocuments] = useState<Set<string>>(new Set());
+  const [downloadingDocuments, setDownloadingDocuments] = useState<Set<string>>(new Set());
 
   const { user } = useAuth();
 
@@ -72,6 +76,9 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const [uploadTab, setUploadTab] = useState(0);
+  const [urlInput, setUrlInput] = useState('');
+
   const handleUpload = async () => {
     if (!selectedFile) return;
 
@@ -85,6 +92,32 @@ const Dashboard: React.FC = () => {
     } catch (err: any) {
       console.error('Error uploading document:', err);
       const errorMessage = err.response?.data?.detail || 'Failed to upload document. Please try again.';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUrlUpload = async () => {
+    if (!urlInput) return;
+
+    setUploading(true);
+    try {
+      const newDoc = await documentService.uploadFromUrl(urlInput);
+      console.log('New document from URL:', newDoc);
+
+      if (newDoc && newDoc.id) {
+        setDocuments(prevDocs => [...prevDocs, newDoc]);
+        setUploadDialogOpen(false);
+        setUrlInput('');
+        toast.success('Document imported successfully! 🎉');
+      } else {
+        throw new Error('Invalid response from server');
+      }
+    } catch (err: any) {
+      console.error('Error importing document:', err);
+      const errorMessage = err.response?.data?.detail || 'Failed to import document. Please try again.';
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -113,6 +146,23 @@ const Dashboard: React.FC = () => {
     window.location.href = `/documents/${documentId}`;
   };
 
+  const handleDownload = async (documentId: string, filename: string) => {
+    setDownloadingDocuments(prev => new Set(prev).add(documentId));
+    try {
+      await documentService.downloadDocument(documentId, filename);
+      toast.success('Download started');
+    } catch (err: any) {
+      console.error('Error downloading document:', err);
+      toast.error('Failed to download document');
+    } finally {
+      setDownloadingDocuments(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(documentId);
+        return newSet;
+      });
+    }
+  };
+
   const handleCancelProcessing = async (documentId: string) => {
     setCancellingDocuments(prev => new Set(prev).add(documentId));
     try {
@@ -134,7 +184,8 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string | undefined) => {
+    if (!status) return 'text.secondary';
     switch (status.toUpperCase()) {
       case 'COMPLETED':
       case 'PROCESSED':
@@ -151,7 +202,8 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string | undefined) => {
+    if (!status) return <FileText size={16} />;
     switch (status.toUpperCase()) {
       case 'COMPLETED':
       case 'PROCESSED':
@@ -390,189 +442,215 @@ const Dashboard: React.FC = () => {
             >
               <Grid container spacing={3}>
                 <AnimatePresence>
-                  {documents.map((doc, index) => (
-                    <Grid item xs={12} sm={6} md={4} key={doc.id}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
-                        transition={{ duration: 0.4, delay: index * 0.1 }}
-                        whileHover={{ y: -4 }}
-                      >
-                        <Card
-                          elevation={0}
-                          sx={{
-                            height: '100%',
-                            borderRadius: 3,
-                            background: 'rgba(255, 255, 255, 0.9)',
-                            backdropFilter: 'blur(20px)',
-                            border: '1px solid rgba(255, 255, 255, 0.2)',
-                            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
-                            transition: 'all 0.3s ease-in-out',
-                            '&:hover': {
-                              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)',
-                              transform: 'translateY(-2px)',
-                            },
-                          }}
+                  {documents.map((doc, index) => {
+                    if (!doc) return null;
+                    return (
+                      <Grid item xs={12} sm={6} md={4} key={doc.id || index}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -20 }}
+                          transition={{ duration: 0.4, delay: index * 0.1 }}
+                          whileHover={{ y: -4 }}
                         >
-                          <CardContent sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2 }}>
-                              <Box
-                                sx={{
-                                  width: 48,
-                                  height: 48,
-                                  borderRadius: 2,
-                                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  mr: 2,
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <FileText size={24} color="white" />
+                          <Card
+                            elevation={0}
+                            sx={{
+                              height: '100%',
+                              borderRadius: 3,
+                              background: 'rgba(255, 255, 255, 0.9)',
+                              backdropFilter: 'blur(20px)',
+                              border: '1px solid rgba(255, 255, 255, 0.2)',
+                              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+                              transition: 'all 0.3s ease-in-out',
+                              '&:hover': {
+                                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)',
+                                transform: 'translateY(-2px)',
+                              },
+                            }}
+                          >
+                            <CardContent sx={{ p: 3 }}>
+                              <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2 }}>
+                                <Box
+                                  sx={{
+                                    width: 48,
+                                    height: 48,
+                                    borderRadius: 2,
+                                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    mr: 2,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <FileText size={24} color="white" />
+                                </Box>
+                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                  <Typography
+                                    variant="h6"
+                                    sx={{
+                                      fontWeight: 600,
+                                      mb: 0.5,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                    title={doc.filename || 'Untitled'}
+                                  >
+                                    {doc.filename || 'Untitled'}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                    {doc.created_at ? new Date(doc.created_at).toLocaleDateString('en-US', {
+                                      year: 'numeric',
+                                      month: 'short',
+                                      day: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    }) : 'Unknown Date'}
+                                  </Typography>
+                                </Box>
                               </Box>
-                              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                                <Typography
-                                  variant="h6"
+
+                              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                <Chip
+                                  icon={getStatusIcon(doc?.status)}
+                                  label={doc?.status || 'UNKNOWN'}
+                                  size="small"
+                                  color={
+                                    (doc?.status?.toUpperCase() === 'COMPLETED' || doc?.status?.toUpperCase() === 'PROCESSED')
+                                      ? 'success'
+                                      : (doc?.status?.toUpperCase() === 'PROCESSING' || doc?.status?.toUpperCase() === 'UPLOADED')
+                                        ? 'info'
+                                        : doc?.status?.toUpperCase() === 'ERROR'
+                                          ? 'error'
+                                          : 'warning'
+                                  }
                                   sx={{
                                     fontWeight: 600,
-                                    mb: 0.5,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                  title={doc.filename}
-                                >
-                                  {doc.filename}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                  {new Date(doc.created_at).toLocaleDateString('en-US', {
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })}
-                                </Typography>
-                              </Box>
-                            </Box>
-
-                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                              <Chip
-                                icon={getStatusIcon(doc.status)}
-                                label={doc.status}
-                                size="small"
-                                color={
-                                  doc.status.toUpperCase() === 'COMPLETED' || doc.status.toUpperCase() === 'PROCESSED'
-                                    ? 'success'
-                                    : doc.status.toUpperCase() === 'PROCESSING' || doc.status.toUpperCase() === 'UPLOADED'
-                                      ? 'info'
-                                      : doc.status.toUpperCase() === 'ERROR'
-                                        ? 'error'
-                                        : 'warning'
-                                }
-                                sx={{
-                                  fontWeight: 600,
-                                  '& .MuiChip-icon': {
-                                    fontSize: '1rem',
-                                  },
-                                }}
-                              />
-                            </Box>
-
-                            {doc.status.toUpperCase() === 'PROCESSING' && (
-                              <Box sx={{ mb: 2 }}>
-                                <LinearProgress
-                                  sx={{
-                                    borderRadius: 1,
-                                    height: 6,
-                                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                                    '& .MuiLinearProgress-bar': {
-                                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                    '& .MuiChip-icon': {
+                                      fontSize: '1rem',
                                     },
                                   }}
                                 />
-                                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                                  {doc.processing_step || 'Processing document...'}
-                                </Typography>
                               </Box>
-                            )}
-                          </CardContent>
 
-                          <Divider sx={{ opacity: 0.1 }} />
-
-                          <CardActions sx={{ p: 2, justifyContent: 'space-between' }}>
-                            <Box sx={{ display: 'flex', gap: 1 }}>
-                              <Tooltip title="View Document">
-                                <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                                  <IconButton
-                                    size="small"
-                                    onClick={() => handleViewDocument(doc.id.toString())}
-                                    disabled={doc.status.toUpperCase() === 'UPLOADING'}
+                              {doc?.status?.toUpperCase() === 'PROCESSING' && (
+                                <Box sx={{ mb: 2 }}>
+                                  <LinearProgress
                                     sx={{
-                                      background: 'rgba(102, 126, 234, 0.1)',
-                                      color: '#667eea',
-                                      '&:hover': {
-                                        background: 'rgba(102, 126, 234, 0.2)',
+                                      borderRadius: 1,
+                                      height: 6,
+                                      backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                      '& .MuiLinearProgress-bar': {
+                                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                                       },
                                     }}
-                                  >
-                                    <Eye size={16} />
-                                  </IconButton>
-                                </motion.div>
-                              </Tooltip>
+                                  />
+                                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                                    {doc?.processing_step || 'Processing document...'}
+                                  </Typography>
+                                </Box>
+                              )}
+                            </CardContent>
 
-                              {doc.status.toUpperCase() === 'PROCESSING' && (
-                                <Tooltip title="Cancel Processing">
+                            <Divider sx={{ opacity: 0.1 }} />
+
+                            <CardActions sx={{ p: 2, justifyContent: 'space-between' }}>
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Tooltip title="View Document">
                                   <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
                                     <IconButton
                                       size="small"
-                                      onClick={() => handleCancelProcessing(doc.id.toString())}
-                                      disabled={cancellingDocuments.has(doc.id.toString())}
+                                      onClick={() => handleViewDocument(doc.id.toString())}
+                                      disabled={doc.status.toUpperCase() === 'UPLOADING'}
                                       sx={{
-                                        background: 'rgba(255, 152, 0, 0.1)',
-                                        color: '#ff9800',
+                                        background: 'rgba(102, 126, 234, 0.1)',
+                                        color: '#667eea',
                                         '&:hover': {
-                                          background: 'rgba(255, 152, 0, 0.2)',
+                                          background: 'rgba(102, 126, 234, 0.2)',
                                         },
                                       }}
                                     >
-                                      {cancellingDocuments.has(doc.id.toString()) ? (
+                                      <Eye size={16} />
+                                    </IconButton>
+                                  </motion.div>
+                                </Tooltip>
+
+                                {doc.status.toUpperCase() === 'PROCESSING' && (
+                                  <Tooltip title="Cancel Processing">
+                                    <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => handleCancelProcessing(doc.id.toString())}
+                                        disabled={cancellingDocuments.has(doc.id.toString())}
+                                        sx={{
+                                          background: 'rgba(255, 152, 0, 0.1)',
+                                          color: '#ff9800',
+                                          '&:hover': {
+                                            background: 'rgba(255, 152, 0, 0.2)',
+                                          },
+                                        }}
+                                      >
+                                        {cancellingDocuments.has(doc.id.toString()) ? (
+                                          <CircularProgress size={16} />
+                                        ) : (
+                                          <X size={16} />
+                                        )}
+                                      </IconButton>
+                                    </motion.div>
+                                  </Tooltip>
+                                )}
+
+                                <Tooltip title="Download Document">
+                                  <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => handleDownload(doc.id.toString(), doc.filename)}
+                                      disabled={downloadingDocuments.has(doc.id.toString())}
+                                      sx={{
+                                        background: 'rgba(76, 175, 80, 0.1)',
+                                        color: '#4caf50',
+                                        '&:hover': {
+                                          background: 'rgba(76, 175, 80, 0.2)',
+                                        },
+                                      }}
+                                    >
+                                      {downloadingDocuments.has(doc.id.toString()) ? (
                                         <CircularProgress size={16} />
                                       ) : (
-                                        <X size={16} />
+                                        <Download size={16} />
                                       )}
                                     </IconButton>
                                   </motion.div>
                                 </Tooltip>
-                              )}
-                            </Box>
+                              </Box>
 
-                            <Tooltip title="Delete Document">
-                              <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => {
-                                    setDocumentToDelete(doc.id.toString());
-                                    setDeleteDialogOpen(true);
-                                  }}
-                                  sx={{
-                                    color: '#f44336',
-                                    '&:hover': {
-                                      background: 'rgba(244, 67, 54, 0.2)',
-                                    },
-                                  }}
-                                >
-                                  <Trash2 size={16} />
-                                </IconButton>
-                              </motion.div>
-                            </Tooltip>
-                          </CardActions>
-                        </Card>
-                      </motion.div>
-                    </Grid>
-                  ))}
+                              <Tooltip title="Delete Document">
+                                <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      setDocumentToDelete(doc.id.toString());
+                                      setDeleteDialogOpen(true);
+                                    }}
+                                    sx={{
+                                      color: '#f44336',
+                                      '&:hover': {
+                                        background: 'rgba(244, 67, 54, 0.2)',
+                                      },
+                                    }}
+                                  >
+                                    <Trash2 size={16} />
+                                  </IconButton>
+                                </motion.div>
+                              </Tooltip>
+                            </CardActions>
+                          </Card>
+                        </motion.div>
+                      </Grid>
+                    );
+                  })}
                 </AnimatePresence>
               </Grid>
             </motion.div>
@@ -621,73 +699,103 @@ const Dashboard: React.FC = () => {
           </Box>
         </DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          <DialogContentText sx={{ mb: 3 }}>
-            Select a financial document (PDF) to upload. Our AI will analyze it and provide intelligent insights.
-          </DialogContentText>
-          <Box sx={{ mt: 2 }}>
-            <input
-              accept="application/pdf"
-              style={{ display: 'none' }}
-              id="raised-button-file"
-              type="file"
-              onChange={handleFileChange}
-            />
-            <label htmlFor="raised-button-file">
-              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                <Button
-                  variant="outlined"
-                  component="span"
-                  fullWidth
-                  size="large"
-                  startIcon={<FileText size={20} />}
-                  sx={{
-                    py: 2,
-                    borderRadius: 2,
-                    borderColor: '#667eea',
-                    color: '#667eea',
-                    borderStyle: 'dashed',
-                    borderWidth: 2,
-                    '&:hover': {
-                      borderColor: '#5a6fd8',
-                      backgroundColor: 'rgba(102, 126, 234, 0.05)',
-                    },
-                  }}
-                >
-                  Choose PDF File
-                </Button>
-              </motion.div>
-            </label>
-            {selectedFile && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-              >
-                <Paper
-                  sx={{
-                    mt: 2,
-                    p: 2,
-                    borderRadius: 2,
-                    background: 'rgba(102, 126, 234, 0.1)',
-                    border: '1px solid rgba(102, 126, 234, 0.2)',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <FileText size={20} color="#667eea" />
-                    <Box sx={{ flexGrow: 1 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {selectedFile.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                      </Typography>
-                    </Box>
-                    <CheckCircle size={20} color="#4caf50" />
-                  </Box>
-                </Paper>
-              </motion.div>
-            )}
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+            <Tabs value={uploadTab} onChange={(e, v) => setUploadTab(v)} aria-label="upload tabs">
+              <Tab label="File Upload" />
+              <Tab label="Import from URL" />
+            </Tabs>
           </Box>
+
+          {uploadTab === 0 ? (
+            <>
+              <DialogContentText sx={{ mb: 3 }}>
+                Select a financial document (PDF) to upload. Our AI will analyze it and provide intelligent insights.
+              </DialogContentText>
+              <Box sx={{ mt: 2 }}>
+                <input
+                  accept="application/pdf"
+                  style={{ display: 'none' }}
+                  id="raised-button-file"
+                  type="file"
+                  onChange={handleFileChange}
+                />
+                <label htmlFor="raised-button-file">
+                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                    <Button
+                      variant="outlined"
+                      component="span"
+                      fullWidth
+                      size="large"
+                      startIcon={<FileText size={20} />}
+                      sx={{
+                        py: 2,
+                        borderRadius: 2,
+                        borderColor: '#667eea',
+                        color: '#667eea',
+                        borderStyle: 'dashed',
+                        borderWidth: 2,
+                        '&:hover': {
+                          borderColor: '#5a6fd8',
+                          backgroundColor: 'rgba(102, 126, 234, 0.05)',
+                        },
+                      }}
+                    >
+                      Choose PDF File
+                    </Button>
+                  </motion.div>
+                </label>
+                {selectedFile && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Paper
+                      sx={{
+                        mt: 2,
+                        p: 2,
+                        borderRadius: 2,
+                        background: 'rgba(102, 126, 234, 0.1)',
+                        border: '1px solid rgba(102, 126, 234, 0.2)',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <FileText size={20} color="#667eea" />
+                        <Box sx={{ flexGrow: 1 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {selectedFile.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                          </Typography>
+                        </Box>
+                        <CheckCircle size={20} color="#4caf50" />
+                      </Box>
+                    </Paper>
+                  </motion.div>
+                )}
+              </Box>
+            </>
+          ) : (
+            <>
+              <DialogContentText sx={{ mb: 3 }}>
+                Enter the URL of a financial document (PDF or HTML). We'll download and process it for you.
+              </DialogContentText>
+              <TextField
+                autoFocus
+                margin="dense"
+                id="url"
+                label="Document URL"
+                type="url"
+                fullWidth
+                variant="outlined"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://example.com/report.pdf"
+                sx={{ mb: 2 }}
+              />
+            </>
+          )}
         </DialogContent>
         <DialogActions sx={{ p: 3, pt: 1 }}>
           <Button
@@ -699,9 +807,9 @@ const Dashboard: React.FC = () => {
           </Button>
           <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
             <Button
-              onClick={handleUpload}
+              onClick={uploadTab === 0 ? handleUpload : handleUrlUpload}
               variant="contained"
-              disabled={!selectedFile || uploading}
+              disabled={(uploadTab === 0 && !selectedFile) || (uploadTab === 1 && !urlInput) || uploading}
               startIcon={uploading ? <CircularProgress size={20} /> : <Upload size={20} />}
               sx={{
                 borderRadius: 2,
@@ -711,7 +819,7 @@ const Dashboard: React.FC = () => {
                 },
               }}
             >
-              {uploading ? 'Uploading...' : 'Upload Document'}
+              {uploading ? 'Processing...' : (uploadTab === 0 ? 'Upload Document' : 'Import from URL')}
             </Button>
           </motion.div>
         </DialogActions>
