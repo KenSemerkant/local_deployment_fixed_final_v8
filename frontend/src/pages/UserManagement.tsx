@@ -35,7 +35,7 @@ import {
   Person as PersonIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../services/api';
 
 interface User {
   id: number;
@@ -65,7 +65,7 @@ const UserManagement: React.FC = () => {
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [totalUsers, setTotalUsers] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   // Dialog states
   const [openDialog, setOpenDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -76,7 +76,7 @@ const UserManagement: React.FC = () => {
     is_active: true,
     is_admin: false
   });
-  
+
   // Snackbar states
   const [snackbar, setSnackbar] = useState({
     open: false,
@@ -84,7 +84,7 @@ const UserManagement: React.FC = () => {
     severity: 'success' as 'success' | 'error'
   });
 
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+  // API_URL is handled by the api client base URL
 
   useEffect(() => {
     fetchUsers();
@@ -93,7 +93,7 @@ const UserManagement: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_URL}/admin/users`, {
+      const response = await api.get('/admin/users', {
         params: {
           page: page + 1,
           per_page: rowsPerPage
@@ -171,15 +171,15 @@ const UserManagement: React.FC = () => {
         if (formData.password) {
           updateData.password = formData.password;
         }
-        
-        await axios.put(`${API_URL}/admin/users/${editingUser.id}`, updateData);
+
+        await api.put(`/admin/users/${editingUser.id}`, updateData);
         showSnackbar('User updated successfully', 'success');
       } else {
         // Create user
-        await axios.post(`${API_URL}/admin/users`, formData);
+        await api.post('/admin/users', formData);
         showSnackbar('User created successfully', 'success');
       }
-      
+
       handleCloseDialog();
       fetchUsers();
     } catch (error: any) {
@@ -189,10 +189,24 @@ const UserManagement: React.FC = () => {
     }
   };
 
-  const handleDeleteUser = async (userId: number) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
+  // Delete confirmation state
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ open: boolean; userId: number | null }>({
+    open: false,
+    userId: null
+  });
+
+  const handleDeleteUser = (userId: number) => {
+    setDeleteConfirmation({ open: true, userId });
+  };
+
+  const handleCancelDelete = () => {
+    setDeleteConfirmation({ open: false, userId: null });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (deleteConfirmation.userId) {
       try {
-        await axios.delete(`${API_URL}/admin/users/${userId}`);
+        await api.delete(`/admin/users/${deleteConfirmation.userId}`);
         showSnackbar('User deleted successfully', 'success');
         fetchUsers();
       } catch (error: any) {
@@ -201,6 +215,7 @@ const UserManagement: React.FC = () => {
         showSnackbar(message, 'error');
       }
     }
+    handleCancelDelete();
   };
 
   const formatDate = (dateString: string) => {
@@ -345,32 +360,48 @@ const UserManagement: React.FC = () => {
               margin="normal"
               required={!editingUser}
             />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={formData.is_active}
-                  onChange={(e) => handleFormChange('is_active', e.target.checked)}
-                />
-              }
-              label="Active"
-              sx={{ mt: 2 }}
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={formData.is_admin}
-                  onChange={(e) => handleFormChange('is_admin', e.target.checked)}
-                />
-              }
-              label="Admin"
-              sx={{ mt: 1 }}
-            />
+            <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={formData.is_active}
+                    onChange={(e) => handleFormChange('is_active', e.target.checked)}
+                  />
+                }
+                label="Active"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={formData.is_admin}
+                    onChange={(e) => handleFormChange('is_admin', e.target.checked)}
+                  />
+                }
+                label="Admin"
+              />
+            </Box>
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog}>Cancel</Button>
           <Button onClick={handleSubmit} variant="contained">
             {editingUser ? 'Update' : 'Create'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirmation.open} onClose={handleCancelDelete} maxWidth="xs" fullWidth>
+        <DialogTitle>Confirm Delete</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this user? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelDelete}>Cancel</Button>
+          <Button onClick={handleConfirmDelete} color="error" variant="contained">
+            Delete
           </Button>
         </DialogActions>
       </Dialog>

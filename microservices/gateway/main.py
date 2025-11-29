@@ -172,23 +172,23 @@ async def get_available_llm_modes(request: Request):
 # Analytics Service Routes (Admin only)
 @app.get("/admin/users")
 async def get_users_admin(request: Request):
-    return await forward_request("analytics", "/admin/users", request)
+    return await forward_request("auth", "/admin/users", request)
 
 @app.post("/admin/users")
 async def create_user_admin(request: Request):
-    return await forward_request("analytics", "/admin/users", request)
+    return await forward_request("auth", "/admin/users", request)
 
 @app.get("/admin/users/{user_id}")
 async def get_user_admin(user_id: int, request: Request):
-    return await forward_request("analytics", f"/admin/users/{user_id}", request)
+    return await forward_request("auth", f"/admin/users/{user_id}", request)
 
 @app.put("/admin/users/{user_id}")
 async def update_user_admin(user_id: int, request: Request):
-    return await forward_request("analytics", f"/admin/users/{user_id}", request)
+    return await forward_request("auth", f"/admin/users/{user_id}", request)
 
 @app.delete("/admin/users/{user_id}")
 async def delete_user_admin(user_id: int, request: Request):
-    return await forward_request("analytics", f"/admin/users/{user_id}", request)
+    return await forward_request("auth", f"/admin/users/{user_id}", request)
 
 # LLM Configuration endpoints (Admin only)
 @app.get("/admin/llm/config")
