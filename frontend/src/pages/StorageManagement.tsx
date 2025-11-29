@@ -7,7 +7,6 @@ import {
   Grid,
   Card,
   CardContent,
-  CardActions,
   Button,
   Table,
   TableBody,
@@ -15,7 +14,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Chip,
   Alert,
   Snackbar,
   CircularProgress,
@@ -24,83 +22,56 @@ import {
   DialogContent,
   DialogActions,
   DialogContentText,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  IconButton,
+  Tooltip,
   List,
   ListItem,
   ListItemText,
-  ListItemIcon,
-  IconButton,
-  Tooltip,
-  LinearProgress
+  ListItemIcon
 } from '@mui/material';
 import {
   Storage as StorageIcon,
-  Folder as FolderIcon,
   Delete as DeleteIcon,
   CleaningServices as CleanIcon,
-  Person as PersonIcon,
-  ExpandMore as ExpandMoreIcon,
   Refresh as RefreshIcon,
   Warning as WarningIcon,
-  CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon,
-  Info as InfoIcon
+  Description as FileIcon
 } from '@mui/icons-material';
-import axios from 'axios';
+import api from '../services/api';
 
-interface StorageDirectory {
-  path: string;
-  size_bytes: number;
-  size_formatted: string;
-  file_count: number;
-  exists: boolean;
-  error?: string;
+// Interfaces matching backend response
+interface StorageOverview {
+  total_size_bytes: number;
+  used_size_bytes: number;
+  free_size_bytes: number;
+  total_files: number;
+  file_types: Record<string, number>;
+  minio_stats: {
+    size_bytes: number;
+    file_count: number;
+  };
 }
 
-interface StorageOverview {
-  total_size: number;
-  total_size_formatted: string;
-  total_files: number;
-  directories: Record<string, StorageDirectory>;
-  last_updated: string;
-  error?: string;
+interface StoredFile {
+  id: number;
+  filename: string;
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  created_at: string;
 }
 
 interface UserStorage {
   user_id: number;
-  email: string;
-  full_name?: string;
-  is_active: boolean;
-  created_at?: string;
-  storage: {
-    documents: {
-      count: number;
-      total_size: number;
-      total_size_formatted: string;
-    };
-    cache: {
-      count: number;
-      total_size: number;
-      total_size_formatted: string;
-    };
-    vector_db: {
-      count: number;
-      total_size: number;
-      total_size_formatted: string;
-    };
-    analysis_results: number;
-    qa_sessions: number;
-    questions: number;
-  };
+  total_size_bytes: number;
+  file_count: number;
+  files: StoredFile[];
 }
 
 interface CleanupResult {
-  success: boolean;
-  cleaned: Record<string, number>;
-  errors: string[];
-  error?: string;
+  cleaned_files_count: number;
+  freed_size_bytes: number;
+  message: string;
 }
 
 const StorageManagement: React.FC = () => {
@@ -108,21 +79,19 @@ const StorageManagement: React.FC = () => {
   const [userStorage, setUserStorage] = useState<UserStorage[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  
+
   const [cleanupDialog, setCleanupDialog] = useState({
     open: false,
     type: '',
     userId: null as number | null,
     userEmail: ''
   });
-  
+
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
     severity: 'success' as 'success' | 'error' | 'info' | 'warning'
   });
-
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
     loadStorageData();
@@ -131,16 +100,18 @@ const StorageManagement: React.FC = () => {
   const loadStorageData = async () => {
     try {
       setLoading(true);
-      
-      // Load storage overview and user storage in parallel
+
+      // Sync metadata first
+      await api.post('/admin/storage/sync');
+
       const [overviewResponse, userStorageResponse] = await Promise.all([
-        axios.get(`${API_URL}/admin/storage/overview`),
-        axios.get(`${API_URL}/admin/storage/users`)
+        api.get('/admin/storage/overview'),
+        api.get('/admin/storage/users')
       ]);
-      
+
       setOverview(overviewResponse.data);
       setUserStorage(userStorageResponse.data.users);
-      
+
     } catch (error: any) {
       console.error('Error loading storage data:', error);
       showSnackbar('Error loading storage data', 'error');
@@ -185,27 +156,20 @@ const StorageManagement: React.FC = () => {
   const performCleanup = async () => {
     try {
       let response;
-      
+
       if (cleanupDialog.type === 'user' && cleanupDialog.userId) {
-        response = await axios.post(`${API_URL}/admin/storage/cleanup/user/${cleanupDialog.userId}`);
+        response = await api.post(`/admin/storage/cleanup/user/${cleanupDialog.userId}`);
       } else if (cleanupDialog.type === 'orphaned') {
-        response = await axios.post(`${API_URL}/admin/storage/cleanup/orphaned`);
+        response = await api.post('/admin/storage/cleanup/orphaned');
       } else {
         throw new Error('Invalid cleanup type');
       }
-      
+
       const result: CleanupResult = response.data;
-      
-      if (result.success) {
-        const cleanedItems = Object.values(result.cleaned).reduce((sum, count) => sum + count, 0);
-        showSnackbar(`Cleanup completed! Cleaned ${cleanedItems} items.`, 'success');
-        
-        // Refresh data
-        await loadStorageData();
-      } else {
-        showSnackbar(`Cleanup failed: ${result.error}`, 'error');
-      }
-      
+
+      showSnackbar(result.message, 'success');
+      await loadStorageData();
+
     } catch (error: any) {
       console.error('Error performing cleanup:', error);
       showSnackbar('Error performing cleanup', 'error');
@@ -214,11 +178,13 @@ const StorageManagement: React.FC = () => {
     }
   };
 
-  const getStorageUsageColor = (sizeBytes: number): string => {
-    if (sizeBytes > 1024 * 1024 * 1024) return '#f44336'; // Red for > 1GB
-    if (sizeBytes > 100 * 1024 * 1024) return '#ff9800'; // Orange for > 100MB
-    if (sizeBytes > 10 * 1024 * 1024) return '#2196f3'; // Blue for > 10MB
-    return '#4caf50'; // Green for < 10MB
+  const formatBytes = (bytes: number, decimals = 2) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
   };
 
   if (loading) {
@@ -241,7 +207,7 @@ const StorageManagement: React.FC = () => {
             Storage Management
           </Typography>
           <Typography variant="subtitle1" color="text.secondary">
-            Monitor and manage system storage, user data, and cleanup operations
+            Monitor and manage system storage and cleanup operations
           </Typography>
         </Box>
         <Button
@@ -258,23 +224,35 @@ const StorageManagement: React.FC = () => {
       {overview && (
         <Paper sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" gutterBottom>
-            Storage Overview
+            System Storage Overview
           </Typography>
-          
+
           <Grid container spacing={3} sx={{ mb: 3 }}>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={3}>
               <Card>
                 <CardContent>
                   <Typography color="textSecondary" gutterBottom>
-                    Total Storage Used
+                    Total Used
                   </Typography>
                   <Typography variant="h4" component="div">
-                    {overview.total_size_formatted}
+                    {formatBytes(overview.used_size_bytes)}
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={3}>
+              <Card>
+                <CardContent>
+                  <Typography color="textSecondary" gutterBottom>
+                    Free Space
+                  </Typography>
+                  <Typography variant="h4" component="div">
+                    {formatBytes(overview.free_size_bytes)}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={3}>
               <Card>
                 <CardContent>
                   <Typography color="textSecondary" gutterBottom>
@@ -286,62 +264,41 @@ const StorageManagement: React.FC = () => {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={3}>
               <Card>
                 <CardContent>
                   <Typography color="textSecondary" gutterBottom>
-                    Last Updated
+                    MinIO Usage
                   </Typography>
-                  <Typography variant="h6" component="div">
-                    {new Date(overview.last_updated).toLocaleString()}
+                  <Typography variant="h4" component="div">
+                    {formatBytes(overview.minio_stats.size_bytes)}
+                  </Typography>
+                  <Typography variant="caption" color="textSecondary">
+                    {overview.minio_stats.file_count} objects
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
           </Grid>
 
-          {/* Directory Breakdown */}
-          <Accordion>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="h6">Storage Breakdown by Directory</Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <List>
-                {Object.entries(overview.directories).map(([name, dir]) => (
-                  <ListItem key={name}>
-                    <ListItemIcon>
-                      <FolderIcon color={dir.exists ? 'primary' : 'disabled'} />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Typography variant="subtitle1">{name.toUpperCase()}</Typography>
-                          <Chip 
-                            label={dir.size_formatted} 
-                            size="small" 
-                            sx={{ backgroundColor: getStorageUsageColor(dir.size_bytes), color: 'white' }}
-                          />
-                          <Chip label={`${dir.file_count} files`} size="small" variant="outlined" />
-                        </Box>
-                      }
-                      secondary={
-                        <Box>
-                          <Typography variant="body2" color="text.secondary">
-                            {dir.path}
-                          </Typography>
-                          {dir.error && (
-                            <Typography variant="body2" color="error">
-                              Error: {dir.error}
-                            </Typography>
-                          )}
-                        </Box>
-                      }
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            </AccordionDetails>
-          </Accordion>
+          <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
+            File Types Distribution
+          </Typography>
+          <Grid container spacing={2}>
+            {Object.entries(overview.file_types).map(([type, count]) => (
+              <Grid item key={type}>
+                <Paper variant="outlined" sx={{ p: 1, px: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <FileIcon color="action" fontSize="small" />
+                  <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                    {type || 'Unknown'}:
+                  </Typography>
+                  <Typography variant="body2">
+                    {count}
+                  </Typography>
+                </Paper>
+              </Grid>
+            ))}
+          </Grid>
         </Paper>
       )}
 
@@ -365,81 +322,23 @@ const StorageManagement: React.FC = () => {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>User</TableCell>
-                <TableCell align="right">Documents</TableCell>
-                <TableCell align="right">Cache</TableCell>
-                <TableCell align="right">Vector DB</TableCell>
-                <TableCell align="right">Analysis Results</TableCell>
-                <TableCell align="right">Q&A Data</TableCell>
+                <TableCell>User ID</TableCell>
+                <TableCell align="right">Total Size</TableCell>
+                <TableCell align="right">File Count</TableCell>
                 <TableCell align="center">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {userStorage.map((user) => (
                 <TableRow key={user.user_id}>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <PersonIcon color={user.is_active ? 'primary' : 'disabled'} />
-                      <Box>
-                        <Typography variant="subtitle2">
-                          {user.full_name || user.email}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {user.email}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Box>
-                      <Typography variant="body2">
-                        {user.storage.documents.total_size_formatted}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {user.storage.documents.count} files
-                      </Typography>
-                    </Box>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Box>
-                      <Typography variant="body2">
-                        {user.storage.cache.total_size_formatted}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {user.storage.cache.count} files
-                      </Typography>
-                    </Box>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Box>
-                      <Typography variant="body2">
-                        {user.storage.vector_db.total_size_formatted}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {user.storage.vector_db.count} DBs
-                      </Typography>
-                    </Box>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Typography variant="body2">
-                      {user.storage.analysis_results}
-                    </Typography>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Box>
-                      <Typography variant="body2">
-                        {user.storage.qa_sessions} sessions
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {user.storage.questions} questions
-                      </Typography>
-                    </Box>
-                  </TableCell>
+                  <TableCell>User {user.user_id}</TableCell>
+                  <TableCell align="right">{formatBytes(user.total_size_bytes)}</TableCell>
+                  <TableCell align="right">{user.file_count}</TableCell>
                   <TableCell align="center">
                     <Tooltip title="Clean up all user data">
                       <IconButton
                         color="error"
-                        onClick={() => openCleanupDialog('user', user.user_id, user.email)}
+                        onClick={() => openCleanupDialog('user', user.user_id, `User ${user.user_id}`)}
                         size="small"
                       >
                         <DeleteIcon />
@@ -448,6 +347,13 @@ const StorageManagement: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ))}
+              {userStorage.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} align="center">
+                    No user storage data found
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </TableContainer>
@@ -465,16 +371,10 @@ const StorageManagement: React.FC = () => {
           <DialogContentText>
             {cleanupDialog.type === 'user' ? (
               <>
-                Are you sure you want to clean up all storage data for user <strong>{cleanupDialog.userEmail}</strong>?
+                Are you sure you want to clean up all storage data for <strong>{cleanupDialog.userEmail}</strong>?
                 <br /><br />
-                This will permanently delete:
-                <ul>
-                  <li>All uploaded documents</li>
-                  <li>All cache files</li>
-                  <li>All vector databases</li>
-                  <li>All analysis results</li>
-                  <li>All Q&A sessions and questions</li>
-                </ul>
+                This will permanently delete all files associated with this user.
+                <br />
                 <strong>This action cannot be undone!</strong>
               </>
             ) : (
@@ -482,7 +382,6 @@ const StorageManagement: React.FC = () => {
                 Are you sure you want to clean up orphaned files?
                 <br /><br />
                 This will delete temporary files and cache entries that are no longer associated with any user or document.
-                This operation is generally safe but cannot be undone.
               </>
             )}
           </DialogContentText>

@@ -130,9 +130,14 @@ def get_directory_size(path):
 
 @app.on_event("startup")
 def startup_event():
-    """Initialize database tables on startup"""
+    """Initialize database tables and storage directory on startup"""
     global DATABASE_PATH
     DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
+    
+    # Ensure storage directory exists
+    if not os.path.exists(STORAGE_PATH):
+        os.makedirs(STORAGE_PATH, exist_ok=True)
+        
     create_tables()
 
 @app.get("/")
@@ -353,6 +358,53 @@ def cleanup_orphaned_files():
         "freed_size_bytes": freed_size_bytes,
         "message": f"Cleaned up {cleaned_files_count} orphaned files"
     }
+
+@app.post("/admin/sync")
+def sync_storage_metadata():
+    """Synchronize storage metadata with actual files in MinIO"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    synced_count = 0
+    
+    try:
+        # Get all objects from MinIO
+        minio_objects = list(minio_client.list_objects(DOCUMENTS_BUCKET, recursive=True))
+        
+        for obj in minio_objects:
+            # Check if file already exists in DB
+            cursor.execute("SELECT id FROM stored_files WHERE file_path = ?", (obj.object_name,))
+            existing = cursor.fetchone()
+            
+            if not existing:
+                # Infer user_id from metadata or path if possible, otherwise default to 1 (admin)
+                # In a real scenario, we'd need better metadata management
+                # For now, we'll assume a default user or try to parse from path if it follows a pattern
+                user_id = 1 
+                
+                # Insert into DB
+                cursor.execute("""
+                    INSERT INTO stored_files (filename, file_path, file_size, mime_type, user_id)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    os.path.basename(obj.object_name),
+                    obj.object_name,
+                    obj.size,
+                    "application/pdf", # Default to PDF for now
+                    user_id
+                ))
+                synced_count += 1
+        
+        conn.commit()
+        message = f"Synchronized {synced_count} new files from storage"
+        
+    except Exception as e:
+        print(f"Error syncing storage: {e}")
+        message = f"Error syncing storage: {str(e)}"
+    finally:
+        conn.close()
+        
+    return {"message": message, "synced_count": synced_count}
 
 if __name__ == "__main__":
     import uvicorn

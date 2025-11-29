@@ -243,6 +243,10 @@ async def cleanup_user_storage_admin(user_id: int, request: Request):
 async def cleanup_orphaned_files_admin(request: Request):
     return await forward_request("storage", "/admin/cleanup/orphaned", request)
 
+@app.post("/admin/storage/sync")
+async def sync_storage_admin(request: Request):
+    return await forward_request("storage", "/admin/sync", request)
+
 # Analytics endpoints (Admin only)
 @app.get("/admin/analytics/overview")
 async def get_analytics_overview_admin(request: Request):
