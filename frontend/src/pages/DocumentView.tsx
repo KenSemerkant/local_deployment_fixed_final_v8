@@ -344,18 +344,55 @@ const DocumentView: React.FC = () => {
                         const figures = JSON.parse(document.analysis_results.key_figures);
                         return figures.map((figure: KeyFigure, index: number) => (
                           <Grid item xs={12} sm={6} md={4} key={index}>
-                            <Card variant="outlined">
+                            <Card
+                              elevation={0}
+                              sx={{
+                                height: '100%',
+                                backgroundColor: (theme) => theme.palette.mode === 'light'
+                                  ? 'rgba(64, 81, 137, 0.05)' // Very light primary color
+                                  : 'rgba(255, 255, 255, 0.05)',
+                                border: (theme) => `1px solid ${theme.palette.divider}`,
+                                borderRadius: 2,
+                                transition: 'transform 0.2s, box-shadow 0.2s',
+                                '&:hover': {
+                                  transform: 'translateY(-2px)',
+                                  boxShadow: (theme) => theme.shadows[2],
+                                  backgroundColor: (theme) => theme.palette.mode === 'light'
+                                    ? 'rgba(64, 81, 137, 0.08)'
+                                    : 'rgba(255, 255, 255, 0.08)',
+                                }
+                              }}
+                            >
                               <CardContent>
-                                <Typography variant="h6" color="primary">
+                                <Typography
+                                  variant="h6"
+                                  color="primary"
+                                  sx={{ fontWeight: 700, mb: 1 }}
+                                >
                                   {figure.value}
                                 </Typography>
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    color: 'text.primary',
+                                    fontWeight: 500,
+                                    mb: 1
+                                  }}
+                                >
                                   {figure.name}
                                 </Typography>
                                 {figure.source_page && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    Source: Page {figure.source_page}
-                                  </Typography>
+                                  <Chip
+                                    label={`Page ${figure.source_page}`}
+                                    size="small"
+                                    sx={{
+                                      height: 20,
+                                      fontSize: '0.7rem',
+                                      backgroundColor: (theme) => theme.palette.mode === 'light'
+                                        ? 'rgba(255, 255, 255, 0.5)'
+                                        : 'rgba(0, 0, 0, 0.2)',
+                                    }}
+                                  />
                                 )}
                               </CardContent>
                             </Card>

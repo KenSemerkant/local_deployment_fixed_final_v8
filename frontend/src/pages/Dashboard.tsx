@@ -264,10 +264,7 @@ const Dashboard: React.FC = () => {
                 component="h1"
                 sx={{
                   fontWeight: 800,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
+                  color: theme.palette.text.primary,
                   mb: 1,
                 }}
               >
@@ -293,11 +290,9 @@ const Dashboard: React.FC = () => {
                   py: 1.5,
                   px: 3,
                   borderRadius: 2,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                  boxShadow: '0 4px 15px rgba(0, 0, 0, 0.1)',
                   '&:hover': {
-                    background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                    boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.15)',
                     transform: 'translateY(-1px)',
                   },
                   transition: 'all 0.2s ease-in-out',
@@ -404,12 +399,12 @@ const Dashboard: React.FC = () => {
                       width: 120,
                       height: 120,
                       borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      backgroundColor: theme.palette.primary.main,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       margin: '0 auto 2rem',
-                      boxShadow: '0 10px 30px rgba(102, 126, 234, 0.3)',
+                      boxShadow: '0 10px 30px rgba(0, 0, 0, 0.1)',
                     }}
                   >
                     <Upload size={48} color="white" />
@@ -435,11 +430,9 @@ const Dashboard: React.FC = () => {
                       px: 4,
                       fontSize: '1.1rem',
                       borderRadius: 2,
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                      boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                      boxShadow: '0 4px 15px rgba(0, 0, 0, 0.1)',
                       '&:hover': {
-                        background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                        boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.15)',
                         transform: 'translateY(-1px)',
                       },
                       transition: 'all 0.2s ease-in-out',
@@ -501,7 +494,7 @@ const Dashboard: React.FC = () => {
                                     width: 48,
                                     height: 48,
                                     borderRadius: 2,
-                                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                    backgroundColor: theme.palette.primary.main,
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',
@@ -705,7 +698,7 @@ const Dashboard: React.FC = () => {
                 width: 48,
                 height: 48,
                 borderRadius: 2,
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                backgroundColor: theme.palette.primary.main,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

@@ -58,12 +58,10 @@ const Header: React.FC = () => {
       <AppBar
         position="static"
         sx={{
-          background: mode === 'light'
-            ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-            : '#1e293b',
+          background: theme.palette.background.paper,
           backdropFilter: 'blur(10px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
+          borderBottom: `1px solid ${theme.palette.divider}`,
+          boxShadow: theme.shadows[1],
         }}
       >
         <Toolbar sx={{ py: 1 }}>
@@ -79,10 +77,7 @@ const Header: React.FC = () => {
                 flexGrow: 1,
                 cursor: 'pointer',
                 fontWeight: 700,
-                background: 'linear-gradient(45deg, #ffffff 30%, #f0f8ff 90%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
+                color: theme.palette.text.primary,
                 letterSpacing: '-0.025em',
               }}
               onClick={() => navigate('/')}
@@ -102,11 +97,11 @@ const Header: React.FC = () => {
                 sx={{
                   width: 40,
                   height: 40,
-                  background: 'rgba(255, 255, 255, 0.1)',
+                  background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.1)',
                   backdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  border: `1px solid ${theme.palette.divider}`,
                   '&:hover': {
-                    background: 'rgba(255, 255, 255, 0.2)',
+                    background: mode === 'light' ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.2)',
                   }
                 }}
               >
@@ -126,11 +121,11 @@ const Header: React.FC = () => {
                       sx={{
                         height: 40,
                         borderRadius: 20,
-                        background: 'rgba(255, 255, 255, 0.1)',
-                        color: 'white',
+                        background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.1)',
+                        color: theme.palette.text.primary,
                         fontWeight: 600,
                         backdropFilter: 'blur(10px)',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        border: `1px solid ${theme.palette.divider}`,
                         '& .MuiChip-icon': { color: 'inherit' }
                       }}
                       icon={<BarChart3 size={18} />}
@@ -150,11 +145,11 @@ const Header: React.FC = () => {
                         sx={{
                           width: 40,
                           height: 40,
-                          background: 'rgba(255, 255, 255, 0.1)',
+                          background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.1)',
                           backdropFilter: 'blur(10px)',
-                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                          border: `1px solid ${theme.palette.divider}`,
                           '&:hover': {
-                            background: 'rgba(255, 255, 255, 0.2)',
+                            background: mode === 'light' ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.2)',
                           }
                         }}
                       >
@@ -222,11 +217,11 @@ const Header: React.FC = () => {
                       onClick={handleUserMenuOpen}
                       sx={{
                         p: 0.5,
-                        background: 'rgba(255, 255, 255, 0.1)',
+                        background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.1)',
                         backdropFilter: 'blur(10px)',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        border: `1px solid ${theme.palette.divider}`,
                         '&:hover': {
-                          background: 'rgba(255, 255, 255, 0.2)',
+                          background: mode === 'light' ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.2)',
                         }
                       }}
                     >
@@ -296,15 +291,15 @@ const Header: React.FC = () => {
                     color="inherit"
                     onClick={() => navigate('/login')}
                     sx={{
-                      background: 'rgba(255, 255, 255, 0.1)',
+                      background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.1)',
                       backdropFilter: 'blur(10px)',
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      border: `1px solid ${theme.palette.divider}`,
                       borderRadius: 2,
                       px: 3,
                       py: 1,
                       fontWeight: 600,
                       '&:hover': {
-                        background: 'rgba(255, 255, 255, 0.2)',
+                        background: mode === 'light' ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.2)',
                       }
                     }}
                   >
@@ -319,15 +314,15 @@ const Header: React.FC = () => {
                     color="inherit"
                     onClick={() => navigate('/register')}
                     sx={{
-                      background: 'rgba(255, 255, 255, 0.2)',
+                      background: mode === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.2)',
                       backdropFilter: 'blur(10px)',
-                      border: '1px solid rgba(255, 255, 255, 0.3)',
+                      border: `1px solid ${theme.palette.divider}`,
                       borderRadius: 2,
                       px: 3,
                       py: 1,
                       fontWeight: 600,
                       '&:hover': {
-                        background: 'rgba(255, 255, 255, 0.3)',
+                        background: mode === 'light' ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.3)',
                       }
                     }}
                   >
