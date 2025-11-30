@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -37,8 +37,21 @@ span_processor = BatchSpanProcessor(
 )
 trace.get_tracer_provider().add_span_processor(span_processor)
 
+# Internal API Key configuration
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+
+async def verify_internal_api_key(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        return
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
+
 # Initialize FastAPI app
-app = FastAPI(title="Document Service", version="1.0.0")
+app = FastAPI(
+    title="Document Service", 
+    version="1.0.0",
+    dependencies=[Depends(verify_internal_api_key)]
+)
 
 # Enable tracing for the FastAPI app
 FastAPIInstrumentor.instrument_app(app)
@@ -47,14 +60,7 @@ FastAPIInstrumentor.instrument_app(app)
 RequestsInstrumentor().instrument()
 LoggingInstrumentor().instrument()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS removed as this service is behind the gateway
 
 # Configuration
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/data")
@@ -78,8 +84,58 @@ minio_client = Minio(
 if not minio_client.bucket_exists(DOCUMENTS_BUCKET):
     minio_client.make_bucket(DOCUMENTS_BUCKET)
 
-# LLM Service URL
+# Service URLs
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm-service:8000")
+ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-service:8000")
+
+# ... (MinIO config) ...
+
+def track_analytics_event(user_id: int, event_type: str, event_data: dict):
+    """Helper to track analytics events asynchronously"""
+    print(f"DEBUG: Attempting to track event {event_type} to {ANALYTICS_SERVICE_URL}")
+    try:
+        headers = {}
+        if INTERNAL_API_KEY:
+            headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+            
+        response = requests.post(
+            f"{ANALYTICS_SERVICE_URL}/events",
+            json={
+                "user_id": user_id,
+                "event_type": event_type,
+                "event_data": event_data
+            },
+            headers=headers,
+            timeout=5
+        )
+        print(f"DEBUG: Analytics response: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Failed to track analytics event: {e}")
+        print(f"DEBUG: Failed to track analytics event: {e}")
+
+def track_performance_metric(user_id: int, metric_type: str, start_time: datetime, end_time: datetime, success: bool, error_message: str = None, document_id: int = None):
+    """Helper to track performance metrics asynchronously"""
+    try:
+        headers = {}
+        if INTERNAL_API_KEY:
+            headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+            
+        requests.post(
+            f"{ANALYTICS_SERVICE_URL}/metrics",
+            json={
+                "user_id": user_id,
+                "metric_type": metric_type,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "success": success,
+                "error_message": error_message,
+                "document_id": document_id
+            },
+            headers=headers,
+            timeout=5
+        )
+    except Exception as e:
+        print(f"Error tracking performance metric: {e}")
 
 class DocumentResponse(BaseModel):
     id: int
@@ -211,6 +267,7 @@ def update_document_step(document_id: int, step: str):
 
 def process_document_task(document_id: int):
     """Background task to process a document and extract analysis"""
+    start_time = datetime.utcnow()
     try:
         # Get document from database
         conn = get_db_connection()
@@ -234,6 +291,10 @@ def process_document_task(document_id: int):
             # In docker-compose, service name is 'document-service'
             callback_url = f"http://document-service:8000/documents/{document_id}/step"
             
+            headers = {}
+            if INTERNAL_API_KEY:
+                headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+
             llm_response = requests.post(
                 f"{LLM_SERVICE_URL}/analyze",
                 json={
@@ -241,6 +302,7 @@ def process_document_task(document_id: int):
                     "document_id": document_id,
                     "callback_url": callback_url
                 },
+                headers=headers,
                 timeout=300
             )
         except requests.exceptions.RequestException as e:
@@ -280,9 +342,56 @@ def process_document_task(document_id: int):
         conn.commit()
         conn.close()
 
+        # Track analysis event
+        token_usage = result.get("token_usage", {})
+        print(f"DEBUG: Token usage received from LLM service for analysis: {token_usage}")
+        
+        track_analytics_event(
+            user_id=document["owner_id"],
+            event_type="document_analyzed",
+            event_data={
+                "document_id": document_id,
+                "file_size": document["file_size"],
+                "token_usage": token_usage
+            }
+        )
+        
+        # Track performance metric
+        end_time = datetime.utcnow()
+        track_performance_metric(
+            user_id=document["owner_id"],
+            metric_type="document_processing",
+            start_time=start_time,
+            end_time=end_time,
+            success=True,
+            document_id=document_id
+        )
+
         print(f"Document {document_id} processed successfully")
     except Exception as e:
         print(f"Error processing document {document_id}: {e}")
+        
+        # Track failed performance metric
+        end_time = datetime.utcnow()
+        # Need user_id, try to get it if document was loaded
+        user_id = 0 # Default if document load failed
+        try:
+            if 'document' in locals() and document:
+                user_id = document["owner_id"]
+        except:
+            pass
+            
+        track_performance_metric(
+            user_id=user_id,
+            metric_type="document_processing",
+            start_time=start_time,
+            end_time=end_time,
+            success=False,
+            error_message=str(e),
+            document_id=document_id
+        )
+
+
 
         # Update document status to 'ERROR'
         try:
@@ -358,6 +467,18 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 
     # Process document in background
     background_tasks.add_task(process_document_task, document_id)
+
+    # Track upload event
+    background_tasks.add_task(
+        track_analytics_event,
+        user_id=1, # TODO: Get from auth context
+        event_type="document_uploaded",
+        event_data={
+            "document_id": document_id,
+            "file_size": file_size,
+            "mime_type": file.content_type
+        }
+    )
 
     # Return document info
     return {
@@ -559,7 +680,7 @@ def get_document(document_id: int):
     }
 
 @app.delete("/documents/{document_id}")
-def delete_document(document_id: int):
+def delete_document(document_id: int, background_tasks: BackgroundTasks):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -585,6 +706,14 @@ def delete_document(document_id: int):
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Error deleting object {minio_object_name} from MinIO: {str(e)}")
+
+    # Track deletion event
+    background_tasks.add_task(
+        track_analytics_event,
+        user_id=1, # TODO: Get from auth context
+        event_type="document_deleted",
+        event_data={"document_id": document_id}
+    )
 
     return {"message": "Document deleted successfully"}
 
@@ -612,7 +741,7 @@ def get_document_analysis(document_id: int):
     }
 
 @app.post("/documents/{document_id}/ask")
-def ask_document_question(document_id: int, question_request: QuestionRequest):
+def ask_document_question(document_id: int, question_request: QuestionRequest, background_tasks: BackgroundTasks):
     # First get the analysis result to get the vector DB path
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -637,6 +766,10 @@ def ask_document_question(document_id: int, question_request: QuestionRequest):
     
     # Call LLM service for Q&A
     try:
+        headers = {}
+        if INTERNAL_API_KEY:
+            headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+
         llm_response = requests.post(
             f"{LLM_SERVICE_URL}/ask",
             json={
@@ -644,6 +777,7 @@ def ask_document_question(document_id: int, question_request: QuestionRequest):
                 "question": question_request.question,
                 "vector_db_path": vector_db_path
             },
+            headers=headers,
             timeout=300
         )
         
@@ -681,6 +815,23 @@ def ask_document_question(document_id: int, question_request: QuestionRequest):
         except:
             sources = []
         
+        # Track analytics event
+        token_usage = result.get("token_usage", {})
+        print(f"DEBUG: Token usage received from LLM service: {token_usage}")
+        
+        background_tasks.add_task(
+            track_analytics_event,
+            user_id=1, # TODO: Get from auth context
+            event_type="question_asked",
+            event_data={
+                "document_id": document_id,
+                "question_length": len(question_request.question),
+                "answer_length": len(result["answer"]),
+                "processing_time": 0, # Could track actual time
+                "token_usage": token_usage
+            }
+        )
+
         return {
             "id": question_id,
             "question_text": question_request.question,

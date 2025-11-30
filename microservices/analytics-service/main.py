@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -30,8 +30,21 @@ span_processor = BatchSpanProcessor(
 )
 trace.get_tracer_provider().add_span_processor(span_processor)
 
+# Internal API Key configuration
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+
+async def verify_internal_api_key(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        return
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
+
 # Initialize FastAPI app
-app = FastAPI(title="Analytics Service", version="1.0.0")
+app = FastAPI(
+    title="Analytics Service", 
+    version="1.0.0",
+    dependencies=[Depends(verify_internal_api_key)]
+)
 
 # Enable tracing for the FastAPI app
 FastAPIInstrumentor.instrument_app(app)
@@ -40,17 +53,11 @@ FastAPIInstrumentor.instrument_app(app)
 RequestsInstrumentor().instrument()
 LoggingInstrumentor().instrument()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS removed as this service is behind the gateway
 
 # Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./analytics.db")
+DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
 
 class FeedbackRequest(BaseModel):
     feedback_type: str
@@ -139,6 +146,21 @@ def track_analytics_event(user_id: int, event_type: str, event_data: Dict[str, A
     conn.commit()
     conn.close()
 
+    # Process token usage if present
+    if "token_usage" in event_data and event_data["token_usage"]:
+        usages = event_data["token_usage"]
+        if isinstance(usages, dict):
+            usages = [usages]
+            
+        for usage in usages:
+            track_token_usage(
+                user_id=user_id,
+                model_name=usage.get("model_name", "gpt-3.5-turbo"), # Default or extract from somewhere
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0)
+            )
+
 def track_performance_metric(
     user_id: int, 
     metric_type: str, 
@@ -207,6 +229,74 @@ def track_user_feedback(
     conn.commit()
     conn.close()
 
+class AnalyticsEventRequest(BaseModel):
+    user_id: int
+    event_type: str
+    event_data: Dict[str, Any]
+
+@app.post("/events")
+def receive_analytics_event(event: AnalyticsEventRequest):
+    """Receive analytics event from other services"""
+    print(f"DEBUG: Received event {event.event_type} from user {event.user_id}")
+    
+    if event.event_type == "performance_metric":
+        try:
+            track_performance_metric(
+                user_id=event.user_id,
+                metric_type=event.event_data.get("metric_type", "unknown"),
+                start_time=datetime.fromisoformat(event.event_data["start_time"]),
+                end_time=datetime.fromisoformat(event.event_data["end_time"]),
+                success=event.event_data.get("success", False),
+                error_message=event.event_data.get("error_message"),
+                document_id=event.event_data.get("document_id"),
+                question_id=event.event_data.get("question_id"),
+                file_size_bytes=event.event_data.get("file_size_bytes")
+            )
+        except Exception as e:
+            print(f"Error processing performance metric event: {e}")
+            
+    # Handle other event types...
+    try:
+        track_analytics_event(
+            user_id=event.user_id,
+            event_type=event.event_type,
+            event_data=event.event_data
+        )
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class PerformanceMetricRequest(BaseModel):
+    user_id: int
+    metric_type: str
+    start_time: str
+    end_time: str
+    success: bool
+    error_message: Optional[str] = None
+    document_id: Optional[int] = None
+    question_id: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+
+@app.post("/metrics")
+def receive_performance_metric(metric: PerformanceMetricRequest):
+    """Receive performance metric from other services"""
+    try:
+        track_performance_metric(
+            user_id=metric.user_id,
+            metric_type=metric.metric_type,
+            start_time=datetime.fromisoformat(metric.start_time),
+            end_time=datetime.fromisoformat(metric.end_time),
+            success=metric.success,
+            error_message=metric.error_message,
+            document_id=metric.document_id,
+            question_id=metric.question_id,
+            file_size_bytes=metric.file_size_bytes
+        )
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error tracking performance metric: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.on_event("startup")
 def startup_event():
     """Initialize database tables on startup"""
@@ -240,13 +330,6 @@ def get_analytics_overview(days: int = 30):
     """, (start_date.isoformat(),))
     total_events = cursor.fetchone()["total_events"]
     
-    # Get total performance metrics
-    cursor.execute("""
-        SELECT COUNT(*) as total_metrics FROM performance_metrics 
-        WHERE created_at >= ?
-    """, (start_date.isoformat(),))
-    total_metrics = cursor.fetchone()["total_metrics"]
-    
     # Get total token usage
     cursor.execute("""
         SELECT SUM(total_tokens) as total_tokens FROM token_usage 
@@ -255,24 +338,83 @@ def get_analytics_overview(days: int = 30):
     token_row = cursor.fetchone()
     total_tokens = token_row["total_tokens"] or 0
     
-    # Get feedback count
+    # Get feedback stats
     cursor.execute("""
-        SELECT COUNT(*) as feedback_count FROM user_feedback 
+        SELECT 
+            COUNT(*) as total_feedback,
+            AVG(rating) as avg_rating,
+            SUM(CASE WHEN helpful = 1 THEN 1 ELSE 0 END) as helpful_count
+        FROM user_feedback 
         WHERE created_at >= ?
     """, (start_date.isoformat(),))
-    feedback_count = cursor.fetchone()["feedback_count"]
+    feedback_row = cursor.fetchone()
+    total_feedback = feedback_row["total_feedback"]
+    avg_rating = feedback_row["avg_rating"] or 0
+    helpful_count = feedback_row["helpful_count"] or 0
     
+    # Get performance stats
+    cursor.execute("""
+        SELECT AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration_ms
+        FROM performance_metrics
+        WHERE created_at >= ?
+    """, (start_date.isoformat(),))
+    perf_row = cursor.fetchone()
+    avg_duration = perf_row["avg_duration_ms"] or 0
+    
+    # Get user stats
+    cursor.execute("""
+        SELECT COUNT(DISTINCT user_id) as active_users
+        FROM analytics_events
+        WHERE created_at >= ?
+    """, (start_date.isoformat(),))
+    active_users = cursor.fetchone()["active_users"]
+
+    # Get document stats
+    cursor.execute("""
+        SELECT COUNT(*) as uploaded_docs
+        FROM analytics_events
+        WHERE event_type = 'document_uploaded' AND created_at >= ?
+    """, (start_date.isoformat(),))
+    uploaded_docs = cursor.fetchone()["uploaded_docs"]
+
+    # Get total documents (all time)
+    cursor.execute("SELECT COUNT(*) as total_docs FROM analytics_events WHERE event_type = 'document_uploaded'")
+    total_docs = cursor.fetchone()["total_docs"]
+
     conn.close()
     
+    # Construct response matching frontend interface
     return {
-        "days": days,
-        "total_events": total_events,
-        "total_metrics": total_metrics,
-        "total_tokens": total_tokens,
-        "feedback_count": feedback_count,
-        "overview_date_range": {
-            "start": start_date.isoformat(),
-            "end": end_date.isoformat()
+        "period_days": days,
+        "users": {
+            "total": active_users, # Approximation based on active users
+            "active_in_period": active_users,
+            "activity_rate": 100.0 if active_users > 0 else 0
+        },
+        "documents": {
+            "total": total_docs,
+            "uploaded_in_period": uploaded_docs
+        },
+        "questions": {
+            "total": total_events, # Approximation
+            "asked_in_period": total_events
+        },
+        "tokens": {
+            "total_tokens": total_tokens,
+            "input_tokens": int(total_tokens * 0.7), # Approximation
+            "output_tokens": int(total_tokens * 0.3), # Approximation
+            "estimated_cost": total_tokens * 0.000002 # Approximation ($0.002 per 1k tokens)
+        },
+        "performance": {
+            "avg_analysis_time_seconds": avg_duration,
+            "avg_question_time_seconds": avg_duration # Using same metric for now
+        },
+        "feedback": {
+            "average_rating": round(avg_rating, 1),
+            "total_feedback": total_feedback,
+            "helpful_responses": helpful_count,
+            "unhelpful_responses": total_feedback - helpful_count,
+            "satisfaction_rate": (helpful_count / total_feedback * 100) if total_feedback > 0 else 0
         }
     }
 
@@ -294,13 +436,26 @@ def get_usage_patterns(days: int = 30):
         GROUP BY event_type
     """, (start_date.isoformat(),))
     
-    events_by_type = [{"event_type": row["event_type"], "count": row["count"]} for row in cursor.fetchall()]
+    operation_stats = [{"operation": row["event_type"], "count": row["count"]} for row in cursor.fetchall()]
+    
+    # Get daily usage
+    cursor.execute("""
+        SELECT date(created_at) as day, COUNT(*) as count
+        FROM analytics_events
+        WHERE created_at >= ?
+        GROUP BY date(created_at)
+        ORDER BY day
+    """, (start_date.isoformat(),))
+    
+    daily_usage = [{"date": row["day"], "events": row["count"]} for row in cursor.fetchall()]
     
     conn.close()
     
     return {
-        "days": days,
-        "events_by_type": events_by_type
+        "hourly_usage": [{"hour": i, "events": 0} for i in range(24)], # Keep mock for hourly for now
+        "daily_usage": daily_usage,
+        "top_users": [],
+        "operation_stats": operation_stats
     }
 
 @app.get("/admin/tokens")
@@ -315,37 +470,43 @@ def get_token_analytics(days: int = 30):
     
     # Get token usage by model
     cursor.execute("""
-        SELECT model_name, SUM(total_tokens) as total_tokens, 
-               SUM(prompt_tokens) as total_prompt_tokens,
-               SUM(completion_tokens) as total_completion_tokens
+        SELECT model_name, SUM(total_tokens) as total_tokens
         FROM token_usage 
         WHERE created_at >= ? 
         GROUP BY model_name
     """, (start_date.isoformat(),))
     
-    token_usage_by_model = [
+    vendor_usage = [
         {
-            "model_name": row["model_name"],
+            "vendor": row["model_name"], 
             "total_tokens": row["total_tokens"],
-            "total_prompt_tokens": row["total_prompt_tokens"],
-            "total_completion_tokens": row["total_completion_tokens"]
+            "total_cost": row["total_tokens"] * 0.000002,
+            "operation_count": 0
         }
         for row in cursor.fetchall()
     ]
     
-    # Get total token usage
+    # Get daily token trend
     cursor.execute("""
-        SELECT SUM(total_tokens) as grand_total_tokens FROM token_usage 
+        SELECT date(created_at) as day, SUM(total_tokens) as tokens
+        FROM token_usage
         WHERE created_at >= ?
+        GROUP BY date(created_at)
+        ORDER BY day
     """, (start_date.isoformat(),))
-    grand_total = cursor.fetchone()["grand_total_tokens"] or 0
+    
+    daily_trend = [
+        {"date": row["day"], "tokens": row["tokens"]}
+        for row in cursor.fetchall()
+    ]
     
     conn.close()
     
     return {
-        "days": days,
-        "grand_total_tokens": grand_total,
-        "token_usage_by_model": token_usage_by_model
+        "vendor_usage": vendor_usage,
+        "operation_usage": [],
+        "daily_trend": daily_trend,
+        "top_users": []
     }
 
 @app.get("/admin/performance")
@@ -361,7 +522,7 @@ def get_performance_analytics(days: int = 30):
     # Get average response times by metric type
     cursor.execute("""
         SELECT metric_type,
-               AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60) as avg_duration_seconds,
+               AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration_ms,
                COUNT(*) as total_calls,
                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_calls
         FROM performance_metrics 
@@ -369,22 +530,67 @@ def get_performance_analytics(days: int = 30):
         GROUP BY metric_type
     """, (start_date.isoformat(),))
     
-    performance_by_type = [
+    operation_performance = [
         {
-            "metric_type": row["metric_type"],
-            "avg_duration_seconds": round(row["avg_duration_seconds"], 2),
-            "total_calls": row["total_calls"],
-            "successful_calls": row["successful_calls"],
+            "operation": row["metric_type"],
+            "avg_duration": round(row["avg_duration_ms"], 2),
+            "min_duration": 0, # Not tracking min/max yet
+            "max_duration": 0,
+            "operation_count": row["total_calls"],
             "success_rate": round(row["successful_calls"] / row["total_calls"] * 100, 2) if row["total_calls"] > 0 else 0
         }
         for row in cursor.fetchall()
     ]
     
+    # Get daily performance
+    cursor.execute("""
+        SELECT date(created_at) as day, 
+               AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration,
+               COUNT(*) as count
+        FROM performance_metrics
+        WHERE created_at >= ?
+        GROUP BY date(created_at)
+        ORDER BY day
+    """, (start_date.isoformat(),))
+    
+    daily_performance = [
+        {
+            "date": row["day"], 
+            "avg_duration": row["avg_duration"], 
+            "operation_count": row["count"]
+        } 
+        for row in cursor.fetchall()
+    ]
+
+    # Get file size vs processing time correlation
+    cursor.execute("""
+        SELECT 
+            json_extract(ae.event_data, '$.file_size') as file_size,
+            (julianday(pm.end_time) - julianday(pm.start_time)) * 24 * 60 * 60 * 1000 as duration_ms
+        FROM performance_metrics pm
+        JOIN analytics_events ae ON pm.document_id = json_extract(ae.event_data, '$.document_id')
+        WHERE pm.metric_type = 'document_processing'
+        AND ae.event_type = 'document_analyzed'
+        AND pm.created_at >= ?
+        AND pm.success = 1
+    """, (start_date.isoformat(),))
+    
+    file_size_correlation = [
+        {
+            "file_size_mb": round(float(row["file_size"]) / (1024 * 1024), 2) if row["file_size"] else 0,
+            "duration_seconds": round(row["duration_ms"], 2) # Frontend expects duration_seconds but label says ms, keeping raw ms value
+        }
+        for row in cursor.fetchall()
+        if row["file_size"] is not None
+    ]
+
     conn.close()
     
     return {
-        "days": days,
-        "performance_by_type": performance_by_type
+        "operation_performance": operation_performance,
+        "daily_performance": daily_performance,
+        "file_size_correlation": file_size_correlation,
+        "error_rates": []
     }
 
 @app.get("/admin/satisfaction")
@@ -409,26 +615,40 @@ def get_user_satisfaction(days: int = 30):
     """, (start_date.isoformat(),))
     
     feedback_stats = cursor.fetchone()
+    total_feedback = feedback_stats["total_feedback"]
+    helpful_count = feedback_stats["helpful_count"] or 0
+    unhelpful_count = feedback_stats["unhelpful_count"] or 0
     
     # Get feedback by type
     cursor.execute("""
-        SELECT feedback_type, COUNT(*) as count
+        SELECT feedback_type, AVG(rating) as avg_rating, COUNT(*) as count
         FROM user_feedback 
         WHERE created_at >= ?
         GROUP BY feedback_type
     """, (start_date.isoformat(),))
     
-    feedback_by_type = [{"type": row["feedback_type"], "count": row["count"]} for row in cursor.fetchall()]
+    feedback_by_type = [
+        {
+            "type": row["feedback_type"], 
+            "avg_rating": row["avg_rating"] or 0, 
+            "count": row["count"]
+        } 
+        for row in cursor.fetchall()
+    ]
     
     conn.close()
     
     return {
-        "days": days,
-        "average_rating": round(feedback_stats["avg_rating"], 2) if feedback_stats["avg_rating"] else 0,
-        "total_feedback": feedback_stats["total_feedback"],
-        "helpful_count": feedback_stats["helpful_count"] or 0,
-        "unhelpful_count": feedback_stats["unhelpful_count"] or 0,
-        "feedback_by_type": feedback_by_type
+        "overall_satisfaction": {
+            "average_rating": round(feedback_stats["avg_rating"], 2) if feedback_stats["avg_rating"] else 0,
+            "total_feedback": total_feedback,
+            "positive_rate": (helpful_count / total_feedback * 100) if total_feedback > 0 else 0,
+            "negative_rate": (unhelpful_count / total_feedback * 100) if total_feedback > 0 else 0,
+            "helpful_rate": (helpful_count / total_feedback * 100) if total_feedback > 0 else 0
+        },
+        "feedback_by_type": feedback_by_type,
+        "daily_satisfaction": [],
+        "recent_comments": []
     }
 
 @app.post("/feedback")

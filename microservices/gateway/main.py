@@ -4,6 +4,8 @@ import httpx
 import os
 import asyncio
 import logging
+import time
+from datetime import datetime
 
 # OpenTelemetry tracing setup
 from opentelemetry import trace
@@ -43,13 +45,73 @@ RequestsInstrumentor().instrument()
 LoggingInstrumentor().instrument()
 
 # Add CORS middleware
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+async def send_analytics_event(user_id: int, path: str, method: str, start_time: str, end_time: str, status_code: int):
+    try:
+        analytics_url = SERVICE_ENDPOINTS.get("analytics")
+        if not analytics_url:
+            return
+            
+        success = status_code < 400
+        
+        # Use http_client to send event
+        # Note: http_client might be closed if app is shutting down, but for active requests it should be fine.
+        # We create a new client if needed or use the global one.
+        # Using global http_client is risky in background task if loop closes? 
+        # Actually, asyncio.create_task schedules it on the loop.
+        
+        await http_client.post(
+            f"{analytics_url}/events",
+            json={
+                "user_id": user_id,
+                "event_type": "performance_metric",
+                "event_data": {
+                    "metric_type": f"{method} {path}",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "success": success,
+                    "error_message": str(status_code) if not success else None
+                }
+            },
+            headers={"X-Internal-API-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
+        )
+    except Exception as e:
+        # Fail silently to not impact gateway performance
+        pass
+
+@app.middleware("http")
+async def track_request_metrics(request: Request, call_next):
+    start_time = time.time()
+    start_dt = datetime.utcnow()
+    
+    response = await call_next(request)
+    
+    process_time = time.time() - start_time
+    end_dt = datetime.utcnow()
+    
+    # Skip tracking for health checks, analytics events, and static files
+    if any(p in request.url.path for p in ["/health", "/events", "/static", "favicon.ico"]):
+        return response
+        
+    # Track metrics asynchronously
+    asyncio.create_task(send_analytics_event(
+        1, # Default user_id
+        request.url.path,
+        request.method,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+        response.status_code
+    ))
+    
+    return response
 
 # Service endpoints configuration
 SERVICE_ENDPOINTS = {
@@ -59,6 +121,11 @@ SERVICE_ENDPOINTS = {
     "analytics": os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-service:8000"),
     "storage": os.getenv("STORAGE_SERVICE_URL", "http://storage-service:8000"),
 }
+
+# Internal API Key for service-to-service authentication
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+if not INTERNAL_API_KEY:
+    logger.warning("INTERNAL_API_KEY not set! Service-to-service authentication may fail.")
 
 # HTTP client for service calls
 http_client = httpx.AsyncClient(timeout=30.0)
@@ -293,6 +360,10 @@ async def forward_request(service_name: str, path: str, original_request: Reques
     # Remove hop-by-hop headers that shouldn't be forwarded
     headers.pop('host', None)
     headers.pop('connection', None)
+    
+    # Add Internal API Key
+    if INTERNAL_API_KEY:
+        headers['X-Internal-API-Key'] = INTERNAL_API_KEY
     
     # Get the body content
     body = await original_request.body()

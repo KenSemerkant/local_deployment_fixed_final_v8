@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
@@ -31,8 +31,21 @@ span_processor = BatchSpanProcessor(
 )
 trace.get_tracer_provider().add_span_processor(span_processor)
 
+# Internal API Key configuration
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+
+async def verify_internal_api_key(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        return
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
+
 # Initialize FastAPI app
-app = FastAPI(title="Storage Service", version="1.0.0")
+app = FastAPI(
+    title="Storage Service", 
+    version="1.0.0",
+    dependencies=[Depends(verify_internal_api_key)]
+)
 
 # Enable tracing for the FastAPI app
 FastAPIInstrumentor.instrument_app(app)
@@ -41,14 +54,7 @@ FastAPIInstrumentor.instrument_app(app)
 RequestsInstrumentor().instrument()
 LoggingInstrumentor().instrument()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS removed as this service is behind the gateway
 
 # Configuration
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/data")

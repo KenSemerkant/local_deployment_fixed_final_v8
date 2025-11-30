@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, model_validator
@@ -61,7 +61,6 @@ class DocumentAnalysisResponse(BaseModel):
     summary: str
     key_figures: List[KeyFigure]
     vector_db_path: str
-    token_usage: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
 
 class QuestionRequest(BaseModel):
     document_path: str
@@ -176,8 +175,6 @@ def load_config():
             "api_key": os.getenv("OPENAI_API_KEY", "lm-studio"),
             "base_url": os.getenv("OPENAI_BASE_URL", "http://host.docker.internal:1234"),
             "model": os.getenv("OPENAI_MODEL", "mistralai/magistral-small-2509"),
-            "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-mxbai-embed-large-v1"),
-            "embedding_base_url": os.getenv("EMBEDDING_BASE_URL", os.getenv("OPENAI_BASE_URL", "http://host.docker.internal:1234")),
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
             "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "2000")),
             "timeout": int(os.getenv("LLM_TIMEOUT", "300"))
@@ -431,7 +428,6 @@ class OpenAILLMClient:
                     self.base_url = base_url
                     self.api_key = api_key
                     self.model = model
-                    self.last_usage = {}
 
                 def embed_documents(self, texts: List[str]) -> List[List[float]]:
                     url = f"{self.base_url}/embeddings"
@@ -448,20 +444,6 @@ class OpenAILLMClient:
                     response = requests.post(url, json=payload, headers=headers)
                     response.raise_for_status()
                     data = response.json()
-                    
-                    # Capture usage if available
-                    if "usage" in data:
-                        self.last_usage = data["usage"]
-                        
-                        # Fallback estimation if API returns 0
-                        if self.last_usage.get("total_tokens", 0) == 0:
-                            estimated_tokens = sum(len(t) for t in texts) // 4
-                            self.last_usage["prompt_tokens"] = estimated_tokens
-                            self.last_usage["total_tokens"] = estimated_tokens
-                            print(f"DEBUG: Estimated tokens for embedding: {estimated_tokens}")
-                            
-                        print(f"DEBUG: CustomLMStudioEmbeddings captured usage: {self.last_usage}")
-                    
                     # OpenAI format: data['data'] is a list of objects with 'embedding' field
                     # Sort by index just in case
                     sorted_data = sorted(data['data'], key=lambda x: x['index'])
@@ -587,22 +569,8 @@ class OpenAILLMClient:
             """
 
             # Get analysis from LLM
-            from langchain_community.callbacks import get_openai_callback
-            token_usage = {}
-            
             try:
-                with get_openai_callback() as cb:
-                    response = self.client.invoke(prompt)
-                    token_usage = {
-                        "total_tokens": cb.total_tokens,
-                        "prompt_tokens": cb.prompt_tokens,
-                        "completion_tokens": cb.completion_tokens,
-                        "successful_requests": cb.successful_requests,
-                        "total_cost": cb.total_cost,
-                        "model_name": CURRENT_CONFIG["model"]
-                    }
-                    print(f"DEBUG: Analysis callback state: {cb}")
-                    print(f"DEBUG: Captured token usage: {token_usage}")
+                response = self.client.invoke(prompt)
                 analysis_text = response.content if hasattr(response, 'content') else str(response)
             except Exception as e:
                 logger.error(f"Error calling LLM for document analysis: {e}")
@@ -668,56 +636,20 @@ class OpenAILLMClient:
                 filename = os.path.basename(document_path)
             vector_db_path = f"/data/vector_dbs/{unique_id}_{filename.replace('.pdf', '')}.faiss"
 
-            # Create and save vector store
-            embedding_usage = {}
             try:
-                with get_openai_callback() as cb_embed:
-                    vector_store = FAISS.from_documents(docs, embeddings)
-                    vector_store.save_local(vector_db_path)
-                
-                # Try to get usage from custom embeddings class first
-                custom_usage = getattr(self.embeddings, "last_usage", {})
-                
-                if custom_usage:
-                    embedding_usage = {
-                        "total_tokens": custom_usage.get("total_tokens", 0),
-                        "prompt_tokens": custom_usage.get("prompt_tokens", 0),
-                        "completion_tokens": custom_usage.get("completion_tokens", 0),
-                        "successful_requests": 1,
-                        "total_cost": 0.0, # LM Studio usually doesn't provide cost
-                        "model_name": CURRENT_CONFIG.get("embedding_model", "text-embedding-mxbai-embed-large-v1")
-                    }
-                else:
-                    # Fallback to callback or estimation
-                    embedding_usage = {
-                        "total_tokens": cb_embed.total_tokens,
-                        "prompt_tokens": cb_embed.prompt_tokens,
-                        "completion_tokens": cb_embed.completion_tokens,
-                        "successful_requests": cb_embed.successful_requests,
-                        "total_cost": cb_embed.total_cost,
-                        "model_name": CURRENT_CONFIG.get("embedding_model", "text-embedding-mxbai-embed-large-v1")
-                    }
-                
-                print(f"DEBUG: Embedding callback state: {cb_embed}")
-                print(f"DEBUG: Custom embedding usage: {custom_usage}")
+                # Create and save vector store
+                vector_store = FAISS.from_documents(docs, embeddings)
+                vector_store.save_local(vector_db_path)
             except Exception as e:
                 logger.error(f"Error creating vector store: {e}")
                 vector_db_path = ""  # Set to empty if vector store creation fails
 
             _update_step("Completed")
 
-            # Combine usages into a list
-            all_token_usages = []
-            if token_usage:
-                all_token_usages.append(token_usage)
-            if embedding_usage:
-                all_token_usages.append(embedding_usage)
-
             return {
                 "summary": analysis_text,
                 "key_figures": key_figures,
-                "vector_db_path": vector_db_path,
-                "token_usage": all_token_usages
+                "vector_db_path": vector_db_path
             }
         finally:
             # Clean up temporary file if we created one
@@ -825,9 +757,7 @@ class OpenAILLMClient:
                     "total_tokens": cb.total_tokens,
                     "prompt_tokens": cb.prompt_tokens,
                     "completion_tokens": cb.completion_tokens,
-                    "successful_requests": cb.successful_requests,
-                    "total_cost": cb.total_cost,
-                    "model_name": CURRENT_CONFIG["model"]
+                    "total_cost": cb.total_cost
                 }
             
             # Log retrieved documents
@@ -850,8 +780,7 @@ class OpenAILLMClient:
             
             return {
                 "answer": result["result"],
-                "sources": sources,
-                "token_usage": token_usage
+                "sources": sources
             }
         except Exception as e:
             logger.error(f"Error answering question: {e}")
@@ -1063,8 +992,7 @@ class OllamaLLMClient:
                     "prompt_tokens": cb.prompt_tokens,
                     "completion_tokens": cb.completion_tokens,
                     "successful_requests": cb.successful_requests,
-                    "total_cost": cb.total_cost,
-                    "model_name": CURRENT_CONFIG["model"]
+                    "total_cost": cb.total_cost
                 }
                 
                 # Fallback: Check if token usage is in result (sometimes it is passed through)
@@ -1121,8 +1049,7 @@ def analyze_document(request: DocumentAnalysisRequest):
     return DocumentAnalysisResponse(
         summary=results["summary"],
         key_figures=key_figures,
-        vector_db_path=results["vector_db_path"],
-        token_usage=results.get("token_usage")
+        vector_db_path=results["vector_db_path"]
     )
 
 from fastapi import BackgroundTasks, HTTPException

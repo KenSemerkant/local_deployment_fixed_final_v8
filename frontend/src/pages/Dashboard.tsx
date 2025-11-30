@@ -54,19 +54,28 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchDocuments();
+
+    // Poll for updates every 5 seconds
+    const intervalId = setInterval(() => {
+      // Only poll if there are documents processing or if we just uploaded one
+      // For simplicity, we'll poll always for now, or we could check if any doc is in 'processing' state
+      fetchDocuments(true); // Pass silent flag to avoid loading spinner
+    }, 5000);
+
+    return () => clearInterval(intervalId);
   }, []);
 
-  const fetchDocuments = async () => {
-    setLoading(true);
+  const fetchDocuments = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const docs = await documentService.getDocuments();
       setDocuments(docs);
       setError('');
     } catch (err: any) {
       console.error('Error fetching documents:', err);
-      setError('Failed to load documents. Please try again.');
+      if (!silent) setError('Failed to load documents. Please try again.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 

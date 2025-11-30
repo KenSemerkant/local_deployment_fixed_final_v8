@@ -67,7 +67,7 @@ import {
   ScatterChart,
   Scatter
 } from 'recharts';
-import axios from 'axios';
+import api from '../services/api';
 
 interface AnalyticsOverview {
   period_days: number;
@@ -150,18 +150,16 @@ const Analytics: React.FC = () => {
   const [tokenAnalytics, setTokenAnalytics] = useState<TokenAnalytics | null>(null);
   const [performanceAnalytics, setPerformanceAnalytics] = useState<PerformanceAnalytics | null>(null);
   const [userSatisfaction, setUserSatisfaction] = useState<UserSatisfaction | null>(null);
-  
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState(30);
-  
+
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
     severity: 'success' as 'success' | 'error' | 'info' | 'warning'
   });
-
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D'];
 
@@ -172,7 +170,7 @@ const Analytics: React.FC = () => {
   const loadAnalyticsData = async () => {
     try {
       setLoading(true);
-      
+
       // Load all analytics data in parallel
       const [
         overviewResponse,
@@ -181,19 +179,19 @@ const Analytics: React.FC = () => {
         performanceAnalyticsResponse,
         userSatisfactionResponse
       ] = await Promise.all([
-        axios.get(`${API_URL}/admin/analytics/overview?days=${selectedPeriod}`),
-        axios.get(`${API_URL}/admin/analytics/usage-patterns?days=${selectedPeriod}`),
-        axios.get(`${API_URL}/admin/analytics/tokens?days=${selectedPeriod}`),
-        axios.get(`${API_URL}/admin/analytics/performance?days=${selectedPeriod}`),
-        axios.get(`${API_URL}/admin/analytics/satisfaction?days=${selectedPeriod}`)
+        api.get(`/admin/analytics/overview?days=${selectedPeriod}`),
+        api.get(`/admin/analytics/usage-patterns?days=${selectedPeriod}`),
+        api.get(`/admin/analytics/tokens?days=${selectedPeriod}`),
+        api.get(`/admin/analytics/performance?days=${selectedPeriod}`),
+        api.get(`/admin/analytics/satisfaction?days=${selectedPeriod}`)
       ]);
-      
+
       setOverview(overviewResponse.data);
       setUsagePatterns(usagePatternsResponse.data);
       setTokenAnalytics(tokenAnalyticsResponse.data);
       setPerformanceAnalytics(performanceAnalyticsResponse.data);
       setUserSatisfaction(userSatisfactionResponse.data);
-      
+
     } catch (error: any) {
       console.error('Error loading analytics data:', error);
       showSnackbar('Error loading analytics data', 'error');
@@ -229,11 +227,8 @@ const Analytics: React.FC = () => {
     return new Intl.NumberFormat('en-US').format(num);
   };
 
-  const formatDuration = (seconds: number) => {
-    if (seconds < 60) return `${seconds.toFixed(1)}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}m ${remainingSeconds.toFixed(1)}s`;
+  const formatDuration = (ms: number) => {
+    return `${Math.round(ms)}ms`;
   };
 
   if (loading) {
@@ -307,7 +302,7 @@ const Analytics: React.FC = () => {
               </CardContent>
             </Card>
           </Grid>
-          
+
           <Grid item xs={12} sm={6} md={3}>
             <Card>
               <CardContent>
@@ -328,7 +323,7 @@ const Analytics: React.FC = () => {
               </CardContent>
             </Card>
           </Grid>
-          
+
           <Grid item xs={12} sm={6} md={3}>
             <Card>
               <CardContent>
@@ -349,7 +344,7 @@ const Analytics: React.FC = () => {
               </CardContent>
             </Card>
           </Grid>
-          
+
           <Grid item xs={12} sm={6} md={3}>
             <Card>
               <CardContent>
@@ -607,7 +602,7 @@ const Analytics: React.FC = () => {
                 <ScatterChart data={performanceAnalytics.file_size_correlation}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="file_size_mb" name="File Size (MB)" />
-                  <YAxis dataKey="duration_seconds" name="Duration (s)" />
+                  <YAxis dataKey="duration_seconds" name="Duration (ms)" />
                   <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} />
                   <Scatter name="Processing Time" data={performanceAnalytics.file_size_correlation} fill="#8884d8" />
                 </ScatterChart>
@@ -625,7 +620,7 @@ const Analytics: React.FC = () => {
                   <YAxis yAxisId="left" />
                   <YAxis yAxisId="right" orientation="right" />
                   <RechartsTooltip />
-                  <Line yAxisId="left" type="monotone" dataKey="avg_duration" stroke="#8884d8" strokeWidth={2} name="Avg Duration (s)" />
+                  <Line yAxisId="left" type="monotone" dataKey="avg_duration" stroke="#8884d8" strokeWidth={2} name="Avg Duration (ms)" />
                   <Line yAxisId="right" type="monotone" dataKey="operation_count" stroke="#82ca9d" strokeWidth={2} name="Operation Count" />
                   <Legend />
                 </LineChart>

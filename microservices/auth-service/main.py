@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Header, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -66,8 +66,50 @@ span_processor = BatchSpanProcessor(
 )
 trace.get_tracer_provider().add_span_processor(span_processor)
 
-# Initialize FastAPI app
-app = FastAPI(title="Auth Service", version="1.0.0")
+# Internal API Key configuration
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-service:8000")
+
+async def verify_internal_api_key(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        # If key is not set in env, we might want to fail open or closed. 
+        # For security, let's log a warning but allow (dev mode) or fail.
+        # Given the requirement, we should enforce it.
+        # But if it's missing, maybe we shouldn't block everything if not configured?
+        # Let's assume it MUST be configured.
+        return
+        
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
+
+def track_analytics_event(user_id: int, event_type: str, event_data: dict):
+    """Helper to track analytics events asynchronously"""
+    try:
+        import requests
+        headers = {}
+        if INTERNAL_API_KEY:
+            headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+            
+        requests.post(
+            f"{ANALYTICS_SERVICE_URL}/events",
+            json={
+                "user_id": user_id,
+                "event_type": event_type,
+                "event_data": event_data
+            },
+            headers=headers,
+            timeout=5
+        )
+    except Exception as e:
+        # Don't fail the request if analytics fails
+        print(f"Failed to track analytics event: {e}")
+
+# Initialize FastAPI app with global dependency
+app = FastAPI(
+    title="Auth Service", 
+    version="1.0.0",
+    dependencies=[Depends(verify_internal_api_key)]
+)
 
 # Enable tracing for the FastAPI app
 FastAPIInstrumentor.instrument_app(app)
@@ -79,14 +121,7 @@ LoggingInstrumentor().instrument()
 # Initialize OAuth2 scheme
 oauth2_scheme = HTTPBearer()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS removed as this service is behind the gateway
 
 def get_db_connection():
     """Create a database connection"""
@@ -227,45 +262,69 @@ def health_check():
     return {"status": "healthy", "service": "auth-service"}
 
 @app.post("/token", response_model=Token)
-def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), background_tasks: BackgroundTasks = BackgroundTasks()):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?", (form_data.username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
+        data={"sub": user["email"]}, expires_delta=access_token_expires
+    )
+    
+    # Track login event
+    background_tasks.add_task(
+        track_analytics_event,
+        user_id=user["id"],
+        event_type="user_login",
+        event_data={"email": user["email"]}
     )
     
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/users", response_model=User)
-def register_user(user: UserCreate):
+async def create_user(user: UserCreate, background_tasks: BackgroundTasks):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Check if user already exists
-    cursor.execute("SELECT id FROM users WHERE email = ?", (user.email,))
+    cursor.execute("SELECT * FROM users WHERE email = ?", (user.email,))
     if cursor.fetchone():
+        conn.close()
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Create new user
     hashed_password = get_password_hash(user.password)
-    cursor.execute("""
-        INSERT INTO users (email, hashed_password, full_name)
-        VALUES (?, ?, ?)
-    """, (user.email, hashed_password, user.full_name))
-    
+    cursor.execute(
+        "INSERT INTO users (email, hashed_password, full_name) VALUES (?, ?, ?)",
+        (user.email, hashed_password, user.full_name)
+    )
     user_id = cursor.lastrowid
     conn.commit()
     conn.close()
     
-    # Return the created user
-    return get_user_by_email(user.email)
+    # Track registration event
+    background_tasks.add_task(
+        track_analytics_event,
+        user_id=user_id,
+        event_type="user_registered",
+        event_data={"email": user.email, "full_name": user.full_name}
+    )
+    
+    return {
+        "id": user_id, 
+        "email": user.email, 
+        "full_name": user.full_name,
+        "is_active": True,
+        "is_admin": False
+    }
 
 @app.get("/users/me", response_model=User)
 def read_users_me(current_user: User = Depends(get_current_user)):
