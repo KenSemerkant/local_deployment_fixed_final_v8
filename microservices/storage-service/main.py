@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import os
 import shutil
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import json
 import io
@@ -59,7 +60,7 @@ LoggingInstrumentor().instrument()
 
 # Configuration
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/data")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./storage.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/app_db")
 
 # MinIO configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
@@ -118,29 +119,31 @@ class StorageCleanupResult(BaseModel):
 
 def get_db_connection():
     """Create a database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row  # Enable column access by name
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def create_tables():
     """Create required database tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stored_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            file_size INTEGER NOT NULL,
-            mime_type TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stored_files (
+                id SERIAL PRIMARY KEY,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error creating tables: {e}")
 
 def get_directory_size(path):
     """Calculate the total size of a directory"""
@@ -155,8 +158,6 @@ def get_directory_size(path):
 @app.on_event("startup")
 def startup_event():
     """Initialize database tables and storage directory on startup"""
-    global DATABASE_PATH
-    DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
     
     # Ensure storage directory exists
     if not os.path.exists(STORAGE_PATH):
@@ -236,7 +237,7 @@ def get_user_storage_details(user_id: Optional[int] = None):
     
     if user_id:
         cursor.execute("""
-            SELECT * FROM stored_files WHERE user_id = ?
+            SELECT * FROM stored_files WHERE user_id = %s
             ORDER BY created_at DESC
         """, (user_id,))
     else:
@@ -278,7 +279,7 @@ def cleanup_user_storage(user_id: int):
     cursor = conn.cursor()
 
     # Get files for the user
-    cursor.execute("SELECT * FROM stored_files WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT * FROM stored_files WHERE user_id = %s", (user_id,))
     files = cursor.fetchall()
 
     cleaned_files_count = 0
@@ -308,7 +309,7 @@ def cleanup_user_storage(user_id: int):
                 print(f"Error deleting MinIO object {file_path}: {e}")
 
     # Remove records from database
-    cursor.execute("DELETE FROM stored_files WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM stored_files WHERE user_id = %s", (user_id,))
     conn.commit()
     conn.close()
 
@@ -397,7 +398,7 @@ def sync_storage_metadata():
         
         for obj in minio_objects:
             # Check if file already exists in DB
-            cursor.execute("SELECT id FROM stored_files WHERE file_path = ?", (obj.object_name,))
+            cursor.execute("SELECT id FROM stored_files WHERE file_path = %s", (obj.object_name,))
             existing = cursor.fetchone()
             
             if not existing:
@@ -409,7 +410,7 @@ def sync_storage_metadata():
                 # Insert into DB
                 cursor.execute("""
                     INSERT INTO stored_files (filename, file_path, file_size, mime_type, user_id)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, (
                     os.path.basename(obj.object_name),
                     obj.object_name,

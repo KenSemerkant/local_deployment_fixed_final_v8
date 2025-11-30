@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # API Gateway
   gateway:
@@ -37,7 +35,7 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=sqlite:////data/db/auth.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/app_db
       - JWT_SECRET=${JWT_SECRET:-my-secret-key}
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
       - OTEL_SERVICE_NAME=auth_service
@@ -48,6 +46,7 @@ services:
     depends_on:
       - jaeger
       - redis
+      - postgres
     networks:
       - app-network
     restart: unless-stopped
@@ -60,7 +59,7 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=sqlite:////data/db/documents.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/app_db
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
@@ -81,6 +80,7 @@ services:
       - jaeger
       - redis
       - rabbitmq
+      - postgres
     networks:
       - app-network
     restart: unless-stopped
@@ -145,7 +145,7 @@ services:
       dockerfile: Dockerfile
     command: python worker.py
     environment:
-      - DATABASE_URL=sqlite:////data/db/documents.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/app_db
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
@@ -167,6 +167,7 @@ services:
       - jaeger
       - redis
       - rabbitmq
+      - postgres
     networks:
       - app-network
     restart: unless-stopped
@@ -179,7 +180,7 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=sqlite:////data/db/analytics.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/app_db
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
       - OTEL_SERVICE_NAME=analytics_service
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
@@ -187,6 +188,7 @@ services:
       - analytics_data:/data
     depends_on:
       - jaeger
+      - postgres
     networks:
       - app-network
     restart: unless-stopped
@@ -200,7 +202,7 @@ services:
       - "8000"
     environment:
       - STORAGE_PATH=/data/storage
-      - DATABASE_URL=sqlite:////data/db/storage.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/app_db
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
       - OTEL_SERVICE_NAME=storage_service
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
@@ -208,6 +210,7 @@ services:
       - storage_data:/data
     depends_on:
       - jaeger
+      - postgres
     networks:
       - app-network
     restart: unless-stopped
@@ -258,6 +261,21 @@ services:
       - app-network
     restart: unless-stopped
 
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=app_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
 networks:
   app-network:
     driver: bridge
@@ -270,3 +288,4 @@ volumes:
   storage_data:
   minio_data:
   redis_data:
+  postgres_data:

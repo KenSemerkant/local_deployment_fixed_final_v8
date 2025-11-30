@@ -7,7 +7,8 @@ import os
 import jwt
 from datetime import datetime, timedelta
 import hashlib
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from passlib.context import CryptContext
 
 import redis
@@ -30,7 +31,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Database configuration
-DB_PATH = os.getenv("DATABASE_URL", "sqlite:///./auth.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/app_db")
 
 class UserCreate(BaseModel):
     email: str
@@ -92,11 +93,6 @@ ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-ser
 
 async def verify_internal_api_key(x_internal_api_key: str = Header(None)):
     if not INTERNAL_API_KEY:
-        # If key is not set in env, we might want to fail open or closed. 
-        # For security, let's log a warning but allow (dev mode) or fail.
-        # Given the requirement, we should enforce it.
-        # But if it's missing, maybe we shouldn't block everything if not configured?
-        # Let's assume it MUST be configured.
         return
         
     if x_internal_api_key != INTERNAL_API_KEY:
@@ -145,55 +141,61 @@ oauth2_scheme = HTTPBearer()
 
 def get_db_connection():
     """Create a database connection"""
-    conn = sqlite3.connect(DB_PATH.replace("sqlite:///", ""))
-    conn.row_factory = sqlite3.Row  # Enable column access by name
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def create_tables():
     """Create required database tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            hashed_password TEXT NOT NULL,
-            full_name TEXT,
-            avatar_url TEXT,
-            is_active BOOLEAN DEFAULT 1,
-            is_admin BOOLEAN DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Check if avatar_url column exists (for migration)
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if "avatar_url" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
-    
-    # Create demo user if doesn't exist
-    cursor.execute("SELECT id FROM users WHERE email = ?", ("demo@example.com",))
-    if cursor.fetchone() is None:
-        hashed_password = pwd_context.hash("demo123")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
         cursor.execute("""
-            INSERT INTO users (email, hashed_password, full_name, is_active, is_admin)
-            VALUES (?, ?, ?, ?, ?)
-        """, ("demo@example.com", hashed_password, "Demo User", True, False))
-    
-    # Create admin user if doesn't exist
-    cursor.execute("SELECT id FROM users WHERE email = ?", ("admin@example.com",))
-    if cursor.fetchone() is None:
-        hashed_password = pwd_context.hash("admin123")
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                hashed_password TEXT NOT NULL,
+                full_name TEXT,
+                avatar_url TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                is_admin BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Check if avatar_url column exists (for migration)
+        # Note: In Postgres, we query information_schema
         cursor.execute("""
-            INSERT INTO users (email, hashed_password, full_name, is_active, is_admin)
-            VALUES (?, ?, ?, ?, ?)
-        """, ("admin@example.com", hashed_password, "Admin User", True, True))
-    
-    conn.commit()
-    conn.close()
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='users' AND column_name='avatar_url'
+        """)
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+        
+        # Create demo user if doesn't exist
+        cursor.execute("SELECT id FROM users WHERE email = %s", ("demo@example.com",))
+        if cursor.fetchone() is None:
+            hashed_password = pwd_context.hash("demo123")
+            cursor.execute("""
+                INSERT INTO users (email, hashed_password, full_name, is_active, is_admin)
+                VALUES (%s, %s, %s, %s, %s)
+            """, ("demo@example.com", hashed_password, "Demo User", True, False))
+        
+        # Create admin user if doesn't exist
+        cursor.execute("SELECT id FROM users WHERE email = %s", ("admin@example.com",))
+        if cursor.fetchone() is None:
+            hashed_password = pwd_context.hash("admin123")
+            cursor.execute("""
+                INSERT INTO users (email, hashed_password, full_name, is_active, is_admin)
+                VALUES (%s, %s, %s, %s, %s)
+            """, ("admin@example.com", hashed_password, "Admin User", True, True))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error creating tables: {e}")
 
 def verify_password(plain_password, hashed_password):
     """Verify a plain password against its hash"""
@@ -207,7 +209,7 @@ def get_user_by_email(email: str):
     """Get a user by email from the database"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
     user_row = cursor.fetchone()
     conn.close()
 
@@ -216,9 +218,9 @@ def get_user_by_email(email: str):
             id=user_row["id"],
             email=user_row["email"],
             full_name=user_row["full_name"],
-            avatar_url=user_row["avatar_url"] if "avatar_url" in user_row.keys() else None,
-            is_active=bool(user_row["is_active"]),
-            is_admin=bool(user_row["is_admin"]),
+            avatar_url=user_row["avatar_url"],
+            is_active=user_row["is_active"],
+            is_admin=user_row["is_admin"],
             hashed_password=user_row["hashed_password"]
         )
     return None
@@ -324,7 +326,7 @@ def health_check():
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), background_tasks: BackgroundTasks = BackgroundTasks()):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE email = ?", (form_data.username,))
+    cursor.execute("SELECT * FROM users WHERE email = %s", (form_data.username,))
     user = cursor.fetchone()
     conn.close()
 
@@ -355,17 +357,17 @@ async def create_user(user: UserCreate, background_tasks: BackgroundTasks):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT * FROM users WHERE email = ?", (user.email,))
+    cursor.execute("SELECT * FROM users WHERE email = %s", (user.email,))
     if cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=400, detail="Email already registered")
     
     hashed_password = get_password_hash(user.password)
     cursor.execute(
-        "INSERT INTO users (email, hashed_password, full_name) VALUES (?, ?, ?)",
+        "INSERT INTO users (email, hashed_password, full_name) VALUES (%s, %s, %s) RETURNING id",
         (user.email, hashed_password, user.full_name)
     )
-    user_id = cursor.lastrowid
+    user_id = cursor.fetchone()['id']
     conn.commit()
     conn.close()
     
@@ -402,23 +404,23 @@ def update_user_me(user_update: UserUpdate, current_user: User = Depends(get_cur
     
     if user_update.email is not None:
         # Check if email is already taken by another user
-        cursor.execute("SELECT id FROM users WHERE email = ? AND id != ?", (user_update.email, current_user.id))
+        cursor.execute("SELECT id FROM users WHERE email = %s AND id != %s", (user_update.email, current_user.id))
         if cursor.fetchone():
             conn.close()
             raise HTTPException(status_code=400, detail="Email already registered")
-        update_fields.append("email = ?")
+        update_fields.append("email = %s")
         params.append(user_update.email)
     
     if user_update.full_name is not None:
-        update_fields.append("full_name = ?")
+        update_fields.append("full_name = %s")
         params.append(user_update.full_name)
         
     if user_update.avatar_url is not None:
-        update_fields.append("avatar_url = ?")
+        update_fields.append("avatar_url = %s")
         params.append(user_update.avatar_url)
         
     if user_update.password is not None:
-        update_fields.append("hashed_password = ?")
+        update_fields.append("hashed_password = %s")
         params.append(get_password_hash(user_update.password))
         
     if not update_fields:
@@ -427,14 +429,14 @@ def update_user_me(user_update: UserUpdate, current_user: User = Depends(get_cur
         
     update_fields.append("updated_at = CURRENT_TIMESTAMP")
     
-    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?"
+    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
     params.append(current_user.id)
     
     cursor.execute(query, tuple(params))
     conn.commit()
     
     # Fetch updated user
-    cursor.execute("SELECT * FROM users WHERE id = ?", (current_user.id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (current_user.id,))
     updated_user = cursor.fetchone()
     conn.close()
     
@@ -452,9 +454,9 @@ def update_user_me(user_update: UserUpdate, current_user: User = Depends(get_cur
         id=updated_user["id"],
         email=updated_user["email"],
         full_name=updated_user["full_name"],
-        avatar_url=updated_user["avatar_url"] if "avatar_url" in updated_user.keys() else None,
-        is_active=bool(updated_user["is_active"]),
-        is_admin=bool(updated_user["is_admin"]),
+        avatar_url=updated_user["avatar_url"],
+        is_active=updated_user["is_active"],
+        is_admin=updated_user["is_admin"],
         hashed_password=updated_user["hashed_password"]
     )
 
@@ -465,7 +467,34 @@ def create_user_admin(user: UserCreate, current_user: User = Depends(get_current
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    return register_user(user)
+    # Reuse create_user logic but we need to handle async/background tasks differently or just call the logic
+    # Since create_user is async and takes background_tasks, we can't easily call it directly from sync function
+    # Let's duplicate logic for now or refactor. Duplicating for simplicity.
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM users WHERE email = %s", (user.email,))
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_password = get_password_hash(user.password)
+    cursor.execute(
+        "INSERT INTO users (email, hashed_password, full_name) VALUES (%s, %s, %s) RETURNING id",
+        (user.email, hashed_password, user.full_name)
+    )
+    user_id = cursor.fetchone()['id']
+    conn.commit()
+    conn.close()
+    
+    return {
+        "id": user_id, 
+        "email": user.email, 
+        "full_name": user.full_name,
+        "is_active": True,
+        "is_admin": False
+    }
 
 @app.get("/admin/users")
 def get_users_admin(page: int = 1, per_page: int = 20, current_user: User = Depends(get_current_user)):
@@ -485,7 +514,7 @@ def get_users_admin(page: int = 1, per_page: int = 20, current_user: User = Depe
     cursor.execute("""
         SELECT id, email, full_name, is_active, is_admin, created_at, updated_at 
         FROM users 
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """, (per_page, offset))
     
     users = []
@@ -494,8 +523,8 @@ def get_users_admin(page: int = 1, per_page: int = 20, current_user: User = Depe
             "id": row["id"],
             "email": row["email"],
             "full_name": row["full_name"],
-            "is_active": bool(row["is_active"]),
-            "is_admin": bool(row["is_admin"]),
+            "is_active": row["is_active"],
+            "is_admin": row["is_admin"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "last_login": row["updated_at"], # Placeholder
@@ -520,7 +549,7 @@ def get_user_admin(user_id: int, current_user: User = Depends(get_current_user))
         
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     user_row = cursor.fetchone()
     conn.close()
     
@@ -531,8 +560,8 @@ def get_user_admin(user_id: int, current_user: User = Depends(get_current_user))
         id=user_row["id"],
         email=user_row["email"],
         full_name=user_row["full_name"],
-        is_active=bool(user_row["is_active"]),
-        is_admin=bool(user_row["is_admin"]),
+        is_active=user_row["is_active"],
+        is_admin=user_row["is_admin"],
         hashed_password=user_row["hashed_password"]
     )
 
@@ -546,7 +575,7 @@ def update_user_admin(user_id: int, user_update: UserUpdate, current_user: User 
     cursor = conn.cursor()
     
     # Check if user exists
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     if not cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
@@ -556,23 +585,23 @@ def update_user_admin(user_id: int, user_update: UserUpdate, current_user: User 
     params = []
     
     if user_update.email is not None:
-        update_fields.append("email = ?")
+        update_fields.append("email = %s")
         params.append(user_update.email)
     
     if user_update.full_name is not None:
-        update_fields.append("full_name = ?")
+        update_fields.append("full_name = %s")
         params.append(user_update.full_name)
         
     if user_update.password is not None:
-        update_fields.append("hashed_password = ?")
+        update_fields.append("hashed_password = %s")
         params.append(get_password_hash(user_update.password))
         
     if user_update.is_active is not None:
-        update_fields.append("is_active = ?")
+        update_fields.append("is_active = %s")
         params.append(user_update.is_active)
         
     if user_update.is_admin is not None:
-        update_fields.append("is_admin = ?")
+        update_fields.append("is_admin = %s")
         params.append(user_update.is_admin)
         
     if not update_fields:
@@ -581,14 +610,14 @@ def update_user_admin(user_id: int, user_update: UserUpdate, current_user: User 
         
     update_fields.append("updated_at = CURRENT_TIMESTAMP")
     
-    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?"
+    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
     params.append(user_id)
     
     cursor.execute(query, tuple(params))
     conn.commit()
     
     # Fetch updated user
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     updated_user = cursor.fetchone()
     conn.close()
     
@@ -596,8 +625,8 @@ def update_user_admin(user_id: int, user_update: UserUpdate, current_user: User 
         id=updated_user["id"],
         email=updated_user["email"],
         full_name=updated_user["full_name"],
-        is_active=bool(updated_user["is_active"]),
-        is_admin=bool(updated_user["is_admin"]),
+        is_active=updated_user["is_active"],
+        is_admin=updated_user["is_admin"],
         hashed_password=updated_user["hashed_password"]
     )
 
@@ -611,7 +640,7 @@ def delete_user_admin(user_id: int, current_user: User = Depends(get_current_use
     cursor = conn.cursor()
     
     # Check if user exists
-    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
     if not cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
@@ -621,7 +650,7 @@ def delete_user_admin(user_id: int, current_user: User = Depends(get_current_use
         conn.close()
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     
-    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
     conn.commit()
     conn.close()
     

@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta
 import json
 
@@ -56,8 +57,7 @@ LoggingInstrumentor().instrument()
 # CORS removed as this service is behind the gateway
 
 # Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./analytics.db")
-DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/app_db")
 
 class FeedbackRequest(BaseModel):
     feedback_type: str
@@ -69,69 +69,71 @@ class FeedbackRequest(BaseModel):
 
 def get_db_connection():
     """Create a database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row  # Enable column access by name
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def create_tables():
     """Create required database tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analytics_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS performance_metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            metric_type TEXT NOT NULL,
-            start_time TIMESTAMP NOT NULL,
-            end_time TIMESTAMP NOT NULL,
-            success BOOLEAN NOT NULL,
-            error_message TEXT,
-            document_id INTEGER,
-            question_id INTEGER,
-            file_size_bytes INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS token_usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            model_name TEXT NOT NULL,
-            prompt_tokens INTEGER DEFAULT 0,
-            completion_tokens INTEGER DEFAULT 0,
-            total_tokens INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            feedback_type TEXT NOT NULL,
-            rating INTEGER,
-            comment TEXT,
-            helpful BOOLEAN,
-            question_id INTEGER,
-            document_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS performance_metrics (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                metric_type TEXT NOT NULL,
+                start_time TIMESTAMP NOT NULL,
+                end_time TIMESTAMP NOT NULL,
+                success BOOLEAN NOT NULL,
+                error_message TEXT,
+                document_id INTEGER,
+                question_id INTEGER,
+                file_size_bytes INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                model_name TEXT NOT NULL,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                feedback_type TEXT NOT NULL,
+                rating INTEGER,
+                comment TEXT,
+                helpful BOOLEAN,
+                question_id INTEGER,
+                document_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error creating tables: {e}")
 
 def track_analytics_event(user_id: int, event_type: str, event_data: Dict[str, Any]):
     """Track an analytics event"""
@@ -140,7 +142,7 @@ def track_analytics_event(user_id: int, event_type: str, event_data: Dict[str, A
     
     cursor.execute("""
         INSERT INTO analytics_events (user_id, event_type, event_data)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (user_id, event_type, json.dumps(event_data)))
     
     conn.commit()
@@ -179,7 +181,7 @@ def track_performance_metric(
     cursor.execute("""
         INSERT INTO performance_metrics 
         (user_id, metric_type, start_time, end_time, success, error_message, document_id, question_id, file_size_bytes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         user_id, metric_type, start_time, end_time, success, error_message, 
         document_id, question_id, file_size_bytes
@@ -201,7 +203,7 @@ def track_token_usage(
     
     cursor.execute("""
         INSERT INTO token_usage (user_id, model_name, prompt_tokens, completion_tokens, total_tokens)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (user_id, model_name, prompt_tokens, completion_tokens, total_tokens))
     
     conn.commit()
@@ -223,7 +225,7 @@ def track_user_feedback(
     cursor.execute("""
         INSERT INTO user_feedback 
         (user_id, feedback_type, rating, comment, helpful, question_id, document_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (user_id, feedback_type, rating, comment, helpful, question_id, document_id))
     
     conn.commit()
@@ -300,8 +302,6 @@ def receive_performance_metric(metric: PerformanceMetricRequest):
 @app.on_event("startup")
 def startup_event():
     """Initialize database tables on startup"""
-    global DATABASE_PATH
-    DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
     create_tables()
 
 @app.get("/")
@@ -326,14 +326,14 @@ def get_analytics_overview(days: int = 30):
     # Get total events
     cursor.execute("""
         SELECT COUNT(*) as total_events FROM analytics_events 
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     total_events = cursor.fetchone()["total_events"]
     
     # Get total token usage
     cursor.execute("""
         SELECT SUM(total_tokens) as total_tokens FROM token_usage 
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     token_row = cursor.fetchone()
     total_tokens = token_row["total_tokens"] or 0
@@ -343,9 +343,9 @@ def get_analytics_overview(days: int = 30):
         SELECT 
             COUNT(*) as total_feedback,
             AVG(rating) as avg_rating,
-            SUM(CASE WHEN helpful = 1 THEN 1 ELSE 0 END) as helpful_count
+            SUM(CASE WHEN helpful = TRUE THEN 1 ELSE 0 END) as helpful_count
         FROM user_feedback 
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     feedback_row = cursor.fetchone()
     total_feedback = feedback_row["total_feedback"]
@@ -353,10 +353,11 @@ def get_analytics_overview(days: int = 30):
     helpful_count = feedback_row["helpful_count"] or 0
     
     # Get performance stats
+    # Postgres: EXTRACT(EPOCH FROM (end_time - start_time)) * 1000
     cursor.execute("""
-        SELECT AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration_ms
+        SELECT AVG(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000) as avg_duration_ms
         FROM performance_metrics
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     perf_row = cursor.fetchone()
     avg_duration = perf_row["avg_duration_ms"] or 0
@@ -365,7 +366,7 @@ def get_analytics_overview(days: int = 30):
     cursor.execute("""
         SELECT COUNT(DISTINCT user_id) as active_users
         FROM analytics_events
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     active_users = cursor.fetchone()["active_users"]
 
@@ -373,7 +374,7 @@ def get_analytics_overview(days: int = 30):
     cursor.execute("""
         SELECT COUNT(*) as uploaded_docs
         FROM analytics_events
-        WHERE event_type = 'document_uploaded' AND created_at >= ?
+        WHERE event_type = 'document_uploaded' AND created_at >= %s
     """, (start_date.isoformat(),))
     uploaded_docs = cursor.fetchone()["uploaded_docs"]
 
@@ -432,7 +433,7 @@ def get_usage_patterns(days: int = 30):
     cursor.execute("""
         SELECT event_type, COUNT(*) as count 
         FROM analytics_events 
-        WHERE created_at >= ? 
+        WHERE created_at >= %s 
         GROUP BY event_type
     """, (start_date.isoformat(),))
     
@@ -442,7 +443,7 @@ def get_usage_patterns(days: int = 30):
     cursor.execute("""
         SELECT date(created_at) as day, COUNT(*) as count
         FROM analytics_events
-        WHERE created_at >= ?
+        WHERE created_at >= %s
         GROUP BY date(created_at)
         ORDER BY day
     """, (start_date.isoformat(),))
@@ -472,7 +473,7 @@ def get_token_analytics(days: int = 30):
     cursor.execute("""
         SELECT model_name, SUM(total_tokens) as total_tokens
         FROM token_usage 
-        WHERE created_at >= ? 
+        WHERE created_at >= %s 
         GROUP BY model_name
     """, (start_date.isoformat(),))
     
@@ -490,7 +491,7 @@ def get_token_analytics(days: int = 30):
     cursor.execute("""
         SELECT date(created_at) as day, SUM(total_tokens) as tokens
         FROM token_usage
-        WHERE created_at >= ?
+        WHERE created_at >= %s
         GROUP BY date(created_at)
         ORDER BY day
     """, (start_date.isoformat(),))
@@ -522,11 +523,11 @@ def get_performance_analytics(days: int = 30):
     # Get average response times by metric type
     cursor.execute("""
         SELECT metric_type,
-               AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration_ms,
+               AVG(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000) as avg_duration_ms,
                COUNT(*) as total_calls,
-               SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_calls
+               SUM(CASE WHEN success = TRUE THEN 1 ELSE 0 END) as successful_calls
         FROM performance_metrics 
-        WHERE created_at >= ? 
+        WHERE created_at >= %s 
         GROUP BY metric_type
     """, (start_date.isoformat(),))
     
@@ -545,10 +546,10 @@ def get_performance_analytics(days: int = 30):
     # Get daily performance
     cursor.execute("""
         SELECT date(created_at) as day, 
-               AVG((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60 * 1000) as avg_duration,
+               AVG(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000) as avg_duration,
                COUNT(*) as count
         FROM performance_metrics
-        WHERE created_at >= ?
+        WHERE created_at >= %s
         GROUP BY date(created_at)
         ORDER BY day
     """, (start_date.isoformat(),))
@@ -563,16 +564,17 @@ def get_performance_analytics(days: int = 30):
     ]
 
     # Get file size vs processing time correlation
+    # Postgres: event_data::json->>'file_size'
     cursor.execute("""
         SELECT 
-            json_extract(ae.event_data, '$.file_size') as file_size,
-            (julianday(pm.end_time) - julianday(pm.start_time)) * 24 * 60 * 60 * 1000 as duration_ms
+            ae.event_data::json->>'file_size' as file_size,
+            EXTRACT(EPOCH FROM (pm.end_time - pm.start_time)) * 1000 as duration_ms
         FROM performance_metrics pm
-        JOIN analytics_events ae ON pm.document_id = json_extract(ae.event_data, '$.document_id')
+        JOIN analytics_events ae ON pm.document_id = (ae.event_data::json->>'document_id')::int
         WHERE pm.metric_type = 'document_processing'
         AND ae.event_type = 'document_analyzed'
-        AND pm.created_at >= ?
-        AND pm.success = 1
+        AND pm.created_at >= %s
+        AND pm.success = TRUE
     """, (start_date.isoformat(),))
     
     file_size_correlation = [
@@ -608,10 +610,10 @@ def get_user_satisfaction(days: int = 30):
         SELECT 
             AVG(rating) as avg_rating,
             COUNT(*) as total_feedback,
-            SUM(CASE WHEN helpful = 1 THEN 1 ELSE 0 END) as helpful_count,
-            SUM(CASE WHEN helpful = 0 THEN 1 ELSE 0 END) as unhelpful_count
+            SUM(CASE WHEN helpful = TRUE THEN 1 ELSE 0 END) as helpful_count,
+            SUM(CASE WHEN helpful = FALSE THEN 1 ELSE 0 END) as unhelpful_count
         FROM user_feedback 
-        WHERE created_at >= ?
+        WHERE created_at >= %s
     """, (start_date.isoformat(),))
     
     feedback_stats = cursor.fetchone()
@@ -623,7 +625,7 @@ def get_user_satisfaction(days: int = 30):
     cursor.execute("""
         SELECT feedback_type, AVG(rating) as avg_rating, COUNT(*) as count
         FROM user_feedback 
-        WHERE created_at >= ?
+        WHERE created_at >= %s
         GROUP BY feedback_type
     """, (start_date.isoformat(),))
     

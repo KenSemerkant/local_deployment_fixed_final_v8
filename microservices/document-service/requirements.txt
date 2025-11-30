@@ -26,3 +26,4 @@ opentelemetry-instrumentation-logging==0.42b0
 jaeger-client==4.8.0
 redis==5.0.1
 pika==1.3.2
+psycopg2-binary==2.9.9

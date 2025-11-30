@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import shutil
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import json
 import requests
@@ -77,7 +78,7 @@ LoggingInstrumentor().instrument()
 
 # Configuration
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/data")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./documents.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/app_db")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
@@ -182,89 +183,98 @@ class UpdateStepRequest(BaseModel):
 
 def get_db_connection():
     """Create a database connection"""
-    # Ensure DATABASE_PATH is available
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row  # Enable column access by name
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def migrate_database():
     """Migrate database schema to include new columns"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Check if columns exist in documents table
-    cursor.execute("PRAGMA table_info(documents)")
-    columns = [info[1] for info in cursor.fetchall()]
-    
-    if "error_message" not in columns:
-        print("Migrating database: Adding error_message column")
-        cursor.execute("ALTER TABLE documents ADD COLUMN error_message TEXT")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-    if "processing_step" not in columns:
-        print("Migrating database: Adding processing_step column")
-        cursor.execute("ALTER TABLE documents ADD COLUMN processing_step TEXT")
-        
-    conn.commit()
-    conn.close()
+        # Check if columns exist in documents table
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='documents' AND column_name='error_message'
+        """)
+        if not cursor.fetchone():
+            print("Migrating database: Adding error_message column")
+            cursor.execute("ALTER TABLE documents ADD COLUMN error_message TEXT")
+            
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='documents' AND column_name='processing_step'
+        """)
+        if not cursor.fetchone():
+            print("Migrating database: Adding processing_step column")
+            cursor.execute("ALTER TABLE documents ADD COLUMN processing_step TEXT")
+            
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error migrating database: {e}")
 
 def create_tables():
     """Create required database tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            file_size INTEGER NOT NULL,
-            mime_type TEXT NOT NULL,
-            owner_id INTEGER NOT NULL,
-            status TEXT DEFAULT 'PROCESSING',
-            error_message TEXT,
-            processing_step TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # ... (rest of create_tables remains the same, but I need to be careful not to delete it)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            document_id INTEGER NOT NULL,
-            summary TEXT NOT NULL,
-            key_figures TEXT NOT NULL,
-            vector_db_path TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (document_id) REFERENCES documents (id)
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS qa_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            document_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (document_id) REFERENCES documents (id)
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            qa_session_id INTEGER NOT NULL,
-            question_text TEXT NOT NULL,
-            answer_text TEXT NOT NULL,
-            sources TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (qa_session_id) REFERENCES qa_sessions (id)
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                id SERIAL PRIMARY KEY,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                owner_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'PROCESSING',
+                error_message TEXT,
+                processing_step TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS analysis_results (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                key_figures TEXT NOT NULL,
+                vector_db_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (document_id) REFERENCES documents (id)
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS qa_sessions (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (document_id) REFERENCES documents (id)
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS questions (
+                id SERIAL PRIMARY KEY,
+                qa_session_id INTEGER NOT NULL,
+                question_text TEXT NOT NULL,
+                answer_text TEXT NOT NULL,
+                sources TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (qa_session_id) REFERENCES qa_sessions (id)
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error creating tables: {e}")
 
 def update_document_step(document_id: int, step: str):
     """Update the processing step for a document"""
@@ -272,7 +282,7 @@ def update_document_step(document_id: int, step: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE documents SET processing_step = ? WHERE id = ?",
+            "UPDATE documents SET processing_step = %s WHERE id = %s",
             (step, document_id)
         )
         conn.commit()
@@ -298,7 +308,7 @@ def process_document_task(document_id: int):
         # Get document from database
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
+        cursor.execute("SELECT * FROM documents WHERE id = %s", (document_id,))
         document = cursor.fetchone()
         conn.close()
 
@@ -351,7 +361,7 @@ def process_document_task(document_id: int):
 
         cursor.execute("""
             INSERT INTO analysis_results (document_id, summary, key_figures, vector_db_path)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """, (
             document_id,
             result.get("summary", ""),
@@ -361,7 +371,7 @@ def process_document_task(document_id: int):
 
         # Update document status to 'COMPLETED'
         cursor.execute(
-            "UPDATE documents SET status = ?, processing_step = ?, error_message = NULL WHERE id = ?",
+            "UPDATE documents SET status = %s, processing_step = %s, error_message = NULL WHERE id = %s",
             ("COMPLETED", "Completed", document_id)
         )
 
@@ -426,14 +436,12 @@ def process_document_task(document_id: int):
             document_id=document_id
         )
 
-
-
         # Update document status to 'ERROR'
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE documents SET status = ?, error_message = ?, processing_step = ? WHERE id = ?",
+                "UPDATE documents SET status = %s, error_message = %s, processing_step = %s WHERE id = %s",
                 ("ERROR", str(e), "Failed", document_id)
             )
             conn.commit()
@@ -457,10 +465,6 @@ def process_document_task(document_id: int):
 @app.on_event("startup")
 def startup_event():
     """Initialize database tables on startup"""
-    # Extract path from DATABASE_URL
-    global DATABASE_PATH
-    DATABASE_PATH = DATABASE_URL.replace("sqlite:///", "")
-    
     create_tables()
     migrate_database()
 
@@ -506,10 +510,10 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     # Store the MinIO object name instead of a local path
     cursor.execute("""
         INSERT INTO documents (filename, file_path, file_size, mime_type, owner_id)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s) RETURNING id
     """, (file.filename, object_name, file_size, file.content_type, 1))  # Assuming owner_id = 1 for demo
 
-    document_id = cursor.lastrowid
+    document_id = cursor.fetchone()['id']
     conn.commit()
     conn.close()
 
@@ -650,20 +654,19 @@ async def upload_document_from_url(
             raise HTTPException(status_code=500, detail=f"Failed to upload to storage: {e}")
 
         # 4. Create DB Record
-        # 4. Create DB Record
         conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
             INSERT INTO documents (filename, file_path, file_size, mime_type, owner_id, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
         """, (final_filename, file_path, file_size, content_type, request.owner_id, "UPLOADED"))
         
-        document_id = cursor.lastrowid
+        document_id = cursor.fetchone()['id']
         conn.commit()
         
         # Fetch the created document to return it
-        cursor.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
+        cursor.execute("SELECT * FROM documents WHERE id = %s", (document_id,))
         db_document = cursor.fetchone()
         conn.close()
 
@@ -729,7 +732,7 @@ def get_queue_status():
         SELECT COUNT(*) as count 
         FROM documents 
         WHERE status = 'COMPLETED' 
-        AND updated_at >= datetime('now', '-1 day')
+        AND updated_at >= NOW() - INTERVAL '1 day'
     """)
     completed_24h_count = cursor.fetchone()["count"]
     
@@ -783,8 +786,8 @@ def list_documents():
             "mime_type": doc["mime_type"],
             "owner_id": doc["owner_id"],
             "status": doc["status"],
-            "created_at": doc["created_at"],
-            "updated_at": doc["updated_at"]
+            "created_at": doc["created_at"].isoformat() if doc["created_at"] else None,
+            "updated_at": doc["updated_at"].isoformat() if doc["updated_at"] else None
         })
     
     # Cache result
