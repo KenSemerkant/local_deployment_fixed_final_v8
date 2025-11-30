@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 from datetime import datetime
 import json
+import io
 
 # OpenTelemetry tracing setup
 from opentelemetry import trace
@@ -79,6 +80,23 @@ minio_client = Minio(
 # Verify bucket exists
 if not minio_client.bucket_exists(DOCUMENTS_BUCKET):
     minio_client.make_bucket(DOCUMENTS_BUCKET)
+
+AVATARS_BUCKET = os.getenv("AVATARS_BUCKET", "avatars")
+if not minio_client.bucket_exists(AVATARS_BUCKET):
+    minio_client.make_bucket(AVATARS_BUCKET)
+    # Set policy to public read for avatars
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"AWS": "*"},
+                "Action": ["s3:GetObject"],
+                "Resource": [f"arn:aws:s3:::{AVATARS_BUCKET}/*"]
+            }
+        ]
+    }
+    minio_client.set_bucket_policy(AVATARS_BUCKET, json.dumps(policy))
 
 class StorageOverviewResponse(BaseModel):
     total_size_bytes: int
@@ -411,6 +429,55 @@ def sync_storage_metadata():
         conn.close()
         
     return {"message": message, "synced_count": synced_count}
+
+@app.post("/avatars/upload")
+async def upload_avatar(file: UploadFile = File(...)):
+    """Upload an avatar image"""
+    try:
+        # Validate file type
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="File must be an image")
+            
+        # Generate unique filename
+        ext = os.path.splitext(file.filename)[1]
+        filename = f"{datetime.now().timestamp()}_{os.urandom(4).hex()}{ext}"
+        
+        # Read file content
+        content = await file.read()
+        file_size = len(content)
+        
+        # Upload to MinIO
+        minio_client.put_object(
+            AVATARS_BUCKET,
+            filename,
+            io.BytesIO(content),
+            file_size,
+            content_type=file.content_type
+        )
+        
+        # Return the URL (relative or absolute depending on needs)
+        # For now, return the filename, frontend can construct URL via gateway
+        return {"filename": filename, "url": f"/storage/avatars/{filename}"}
+        
+    except Exception as e:
+        print(f"Error uploading avatar: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload avatar: {str(e)}")
+
+@app.get("/avatars/{filename}")
+async def get_avatar(filename: str):
+    """Get an avatar image"""
+    try:
+        # Get object from MinIO
+        response = minio_client.get_object(AVATARS_BUCKET, filename)
+        
+        # Return as streaming response
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            response, 
+            media_type=response.headers.get("content-type", "image/jpeg")
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="Avatar not found")
 
 if __name__ == "__main__":
     import uvicorn

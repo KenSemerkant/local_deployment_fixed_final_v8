@@ -170,6 +170,10 @@ async def register_user(request: Request):
 async def get_current_user(request: Request):
     return await forward_request("auth", "/users/me", request)
 
+@app.put("/users/me")
+async def update_current_user(request: Request):
+    return await forward_request("auth", "/users/me", request)
+
 # Document Service Routes
 @app.post("/documents")
 async def upload_document(request: Request):
@@ -313,6 +317,15 @@ async def cleanup_orphaned_files_admin(request: Request):
 @app.post("/admin/storage/sync")
 async def sync_storage_admin(request: Request):
     return await forward_request("storage", "/admin/sync", request)
+
+# Avatar endpoints
+@app.post("/storage/avatars/upload")
+async def upload_avatar(request: Request):
+    return await forward_request("storage", "/avatars/upload", request)
+
+@app.get("/storage/avatars/{filename}")
+async def get_avatar(filename: str, request: Request):
+    return await forward_request("storage", f"/avatars/{filename}", request)
 
 # Analytics endpoints (Admin only)
 @app.get("/admin/analytics/overview")

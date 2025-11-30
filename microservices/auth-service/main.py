@@ -30,6 +30,7 @@ class User(BaseModel):
     id: int
     email: str
     full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
 
@@ -42,6 +43,14 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
 
 # OpenTelemetry tracing setup
 from opentelemetry import trace
@@ -140,12 +149,19 @@ def create_tables():
             email TEXT UNIQUE NOT NULL,
             hashed_password TEXT NOT NULL,
             full_name TEXT,
+            avatar_url TEXT,
             is_active BOOLEAN DEFAULT 1,
             is_admin BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Check if avatar_url column exists (for migration)
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if "avatar_url" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
     
     # Create demo user if doesn't exist
     cursor.execute("SELECT id FROM users WHERE email = ?", ("demo@example.com",))
@@ -189,6 +205,7 @@ def get_user_by_email(email: str):
             id=user_row["id"],
             email=user_row["email"],
             full_name=user_row["full_name"],
+            avatar_url=user_row["avatar_url"] if "avatar_url" in user_row.keys() else None,
             is_active=bool(user_row["is_active"]),
             is_admin=bool(user_row["is_admin"]),
             hashed_password=user_row["hashed_password"]
@@ -207,6 +224,7 @@ def authenticate_user(email: str, password: str):
         id=user.id,
         email=user.email,
         full_name=user.full_name,
+        avatar_url=user.avatar_url,
         is_active=user.is_active,
         is_admin=user.is_admin
     )
@@ -331,6 +349,64 @@ def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current user information"""
     return current_user
 
+@app.put("/users/me", response_model=User)
+def update_user_me(user_update: UserUpdate, current_user: User = Depends(get_current_user)):
+    """Update current user profile"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Build update query
+    update_fields = []
+    params = []
+    
+    if user_update.email is not None:
+        # Check if email is already taken by another user
+        cursor.execute("SELECT id FROM users WHERE email = ? AND id != ?", (user_update.email, current_user.id))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Email already registered")
+        update_fields.append("email = ?")
+        params.append(user_update.email)
+    
+    if user_update.full_name is not None:
+        update_fields.append("full_name = ?")
+        params.append(user_update.full_name)
+        
+    if user_update.avatar_url is not None:
+        update_fields.append("avatar_url = ?")
+        params.append(user_update.avatar_url)
+        
+    if user_update.password is not None:
+        update_fields.append("hashed_password = ?")
+        params.append(get_password_hash(user_update.password))
+        
+    if not update_fields:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No fields to update")
+        
+    update_fields.append("updated_at = CURRENT_TIMESTAMP")
+    
+    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?"
+    params.append(current_user.id)
+    
+    cursor.execute(query, tuple(params))
+    conn.commit()
+    
+    # Fetch updated user
+    cursor.execute("SELECT * FROM users WHERE id = ?", (current_user.id,))
+    updated_user = cursor.fetchone()
+    conn.close()
+    
+    return UserInDB(
+        id=updated_user["id"],
+        email=updated_user["email"],
+        full_name=updated_user["full_name"],
+        avatar_url=updated_user["avatar_url"] if "avatar_url" in updated_user.keys() else None,
+        is_active=bool(updated_user["is_active"]),
+        is_admin=bool(updated_user["is_admin"]),
+        hashed_password=updated_user["hashed_password"]
+    )
+
 @app.post("/admin/users", response_model=User)
 def create_user_admin(user: UserCreate, current_user: User = Depends(get_current_user)):
     """Create a new user (admin only)"""
@@ -384,13 +460,6 @@ def get_users_admin(page: int = 1, per_page: int = 20, current_user: User = Depe
         "per_page": per_page,
         "total_pages": (total + per_page - 1) // per_page
     }
-
-class UserUpdate(BaseModel):
-    email: Optional[str] = None
-    full_name: Optional[str] = None
-    password: Optional[str] = None
-    is_active: Optional[bool] = None
-    is_admin: Optional[bool] = None
 
 @app.get("/admin/users/{user_id}", response_model=User)
 def get_user_admin(user_id: int, current_user: User = Depends(get_current_user)):

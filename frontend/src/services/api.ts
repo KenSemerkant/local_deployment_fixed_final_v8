@@ -286,4 +286,41 @@ export const documentService = {
   },
 };
 
+export const authService = {
+  // Update user profile
+  updateProfile: async (data: { full_name?: string; email?: string; avatar_url?: string; password?: string }): Promise<any> => {
+    console.log('Updating user profile:', data);
+    try {
+      const response = await api.put('/users/me', data);
+      console.log('Update profile response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      throw error;
+    }
+  }
+};
+
+export const storageService = {
+  // Upload avatar
+  uploadAvatar: async (file: File): Promise<{ filename: string; url: string }> => {
+    console.log(`Uploading avatar: ${file.name}`);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await api.post('/storage/avatars/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      console.log('Avatar upload response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error uploading avatar:', error);
+      throw error;
+    }
+  }
+};
+
 export default api;

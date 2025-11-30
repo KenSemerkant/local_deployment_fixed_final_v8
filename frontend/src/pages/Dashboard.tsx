@@ -23,7 +23,8 @@ import {
   LinearProgress,
   Tabs,
   Tab,
-  TextField
+  TextField,
+  useTheme
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -39,6 +40,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { documentService, Document } from '../services/api';
 
 const Dashboard: React.FC = () => {
+  const theme = useTheme();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -243,10 +245,16 @@ const Dashboard: React.FC = () => {
             p: 4,
             mb: 4,
             borderRadius: 3,
-            background: 'rgba(255, 255, 255, 0.8)',
+            background: theme.palette.mode === 'light'
+              ? 'rgba(255, 255, 255, 0.8)'
+              : 'rgba(30, 41, 59, 0.8)',
             backdropFilter: 'blur(20px)',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
+            border: theme.palette.mode === 'light'
+              ? '1px solid rgba(255, 255, 255, 0.2)'
+              : '1px solid rgba(255, 255, 255, 0.1)',
+            boxShadow: theme.palette.mode === 'light'
+              ? '0 8px 32px 0 rgba(31, 38, 135, 0.37)'
+              : '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
           }}
         >
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -467,13 +475,21 @@ const Dashboard: React.FC = () => {
                             sx={{
                               height: '100%',
                               borderRadius: 3,
-                              background: 'rgba(255, 255, 255, 0.9)',
+                              background: theme.palette.mode === 'light'
+                                ? 'rgba(255, 255, 255, 0.9)'
+                                : 'rgba(30, 41, 59, 0.6)',
                               backdropFilter: 'blur(20px)',
-                              border: '1px solid rgba(255, 255, 255, 0.2)',
-                              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+                              border: theme.palette.mode === 'light'
+                                ? '1px solid rgba(255, 255, 255, 0.2)'
+                                : '1px solid rgba(255, 255, 255, 0.1)',
+                              boxShadow: theme.palette.mode === 'light'
+                                ? '0 4px 20px rgba(0, 0, 0, 0.1)'
+                                : '0 4px 20px rgba(0, 0, 0, 0.3)',
                               transition: 'all 0.3s ease-in-out',
                               '&:hover': {
-                                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)',
+                                boxShadow: theme.palette.mode === 'light'
+                                  ? '0 8px 30px rgba(0, 0, 0, 0.15)'
+                                  : '0 8px 30px rgba(0, 0, 0, 0.4)',
                                 transform: 'translateY(-2px)',
                               },
                             }}

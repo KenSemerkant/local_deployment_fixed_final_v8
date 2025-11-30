@@ -11,7 +11,8 @@ import {
   Alert,
   CircularProgress,
   InputAdornment,
-  IconButton
+  IconButton,
+  useTheme
 } from '@mui/material';
 import { motion } from 'framer-motion';
 import { Mail, Lock, User, Eye, EyeOff, UserPlus } from 'lucide-react';
@@ -28,6 +29,8 @@ const Register: React.FC = () => {
 
   const { register } = useAuth();
   const navigate = useNavigate();
+
+  const theme = useTheme();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,18 +50,32 @@ const Register: React.FC = () => {
     }
   };
 
+  const isDark = theme.palette.mode === 'dark';
+
   return (
     <Box
       sx={{
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        backgroundColor: theme.palette.background.default,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         p: 2,
+        position: 'relative',
+        overflow: 'hidden',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '50%',
+          background: theme.palette.primary.main,
+          zIndex: 0,
+        }
       }}
     >
-      <Container maxWidth="sm">
+      <Container maxWidth="sm" sx={{ position: 'relative', zIndex: 1 }}>
         <motion.div
           initial={{ opacity: 0, y: 50 }}
           animate={{ opacity: 1, y: 0 }}
@@ -69,10 +86,10 @@ const Register: React.FC = () => {
             sx={{
               p: 6,
               borderRadius: 4,
-              background: 'rgba(255, 255, 255, 0.95)',
+              backgroundColor: theme.palette.background.paper,
               backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              border: `1px solid ${theme.palette.divider}`,
+              boxShadow: theme.shadows[3],
             }}
           >
             <motion.div
@@ -86,10 +103,7 @@ const Register: React.FC = () => {
                   variant="h3"
                   sx={{
                     fontWeight: 800,
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    backgroundClip: 'text',
+                    color: theme.palette.primary.main,
                     mb: 1,
                   }}
                 >
@@ -98,7 +112,7 @@ const Register: React.FC = () => {
                 <Typography
                   variant="h5"
                   sx={{
-                    color: 'text.secondary',
+                    color: 'text.primary',
                     fontWeight: 600,
                     mb: 1,
                   }}
@@ -157,8 +171,8 @@ const Register: React.FC = () => {
                   onChange={(e) => setEmail(e.target.value)}
                   InputProps={{
                     startAdornment: (
-                      <InputAdornment position="start">
-                        <Mail size={20} style={{ color: '#667eea' }} />
+                      <InputAdornment position="start" sx={{ mr: 1.5 }}>
+                        <Mail size={20} style={{ color: theme.palette.text.secondary }} />
                       </InputAdornment>
                     ),
                   }}
@@ -166,12 +180,12 @@ const Register: React.FC = () => {
                     mb: 2,
                     '& .MuiOutlinedInput-root': {
                       borderRadius: 2,
-                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      backgroundColor: theme.palette.background.default,
                       '&:hover': {
-                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                        backgroundColor: theme.palette.action.hover,
                       },
                       '&.Mui-focused': {
-                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                        backgroundColor: theme.palette.background.paper,
                       },
                     },
                   }}
@@ -187,8 +201,8 @@ const Register: React.FC = () => {
                   onChange={(e) => setName(e.target.value)}
                   InputProps={{
                     startAdornment: (
-                      <InputAdornment position="start">
-                        <User size={20} style={{ color: '#667eea' }} />
+                      <InputAdornment position="start" sx={{ mr: 1.5 }}>
+                        <User size={20} style={{ color: theme.palette.text.secondary }} />
                       </InputAdornment>
                     ),
                   }}
@@ -196,12 +210,12 @@ const Register: React.FC = () => {
                     mb: 2,
                     '& .MuiOutlinedInput-root': {
                       borderRadius: 2,
-                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      backgroundColor: theme.palette.background.default,
                       '&:hover': {
-                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                        backgroundColor: theme.palette.action.hover,
                       },
                       '&.Mui-focused': {
-                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                        backgroundColor: theme.palette.background.paper,
                       },
                     },
                   }}
@@ -219,8 +233,8 @@ const Register: React.FC = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   InputProps={{
                     startAdornment: (
-                      <InputAdornment position="start">
-                        <Lock size={20} style={{ color: '#667eea' }} />
+                      <InputAdornment position="start" sx={{ mr: 1.5 }}>
+                        <Lock size={20} style={{ color: theme.palette.text.secondary }} />
                       </InputAdornment>
                     ),
                     endAdornment: (
@@ -239,12 +253,12 @@ const Register: React.FC = () => {
                     mb: 3,
                     '& .MuiOutlinedInput-root': {
                       borderRadius: 2,
-                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                      backgroundColor: theme.palette.background.default,
                       '&:hover': {
-                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                        backgroundColor: theme.palette.action.hover,
                       },
                       '&.Mui-focused': {
-                        backgroundColor: 'rgba(255, 255, 255, 1)',
+                        backgroundColor: theme.palette.background.paper,
                       },
                     },
                   }}
@@ -264,15 +278,10 @@ const Register: React.FC = () => {
                       fontSize: '1rem',
                       fontWeight: 600,
                       borderRadius: 2,
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                      boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                      boxShadow: '0 4px 15px rgba(0, 0, 0, 0.1)',
                       '&:hover': {
-                        background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                        boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.15)',
                         transform: 'translateY(-1px)',
-                      },
-                      '&:disabled': {
-                        background: 'linear-gradient(135deg, #a0a0a0 0%, #808080 100%)',
                       },
                       transition: 'all 0.2s ease-in-out',
                     }}
@@ -282,13 +291,13 @@ const Register: React.FC = () => {
                 </motion.div>
 
                 <Box sx={{ textAlign: 'center', mt: 3 }}>
-                  <Typography variant="body2">
+                  <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                     Already have an account?{' '}
                     <Link
                       href="/login"
                       variant="body2"
                       sx={{
-                        color: '#667eea',
+                        color: theme.palette.primary.main,
                         fontWeight: 600,
                         textDecoration: 'none',
                         '&:hover': {
