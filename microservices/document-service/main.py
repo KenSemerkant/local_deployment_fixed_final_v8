@@ -11,9 +11,20 @@ import requests
 from io import BytesIO
 import logging
 
+import redis
+import json
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Redis configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+try:
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    logger.error(f"Failed to connect to Redis: {e}")
+    redis_client = None
 # OpenTelemetry tracing setup
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -265,6 +276,17 @@ def update_document_step(document_id: int, step: str):
     except Exception as e:
         print(f"Error updating document step: {e}")
 
+    # Invalidate cache so dashboard updates step
+    if redis_client:
+        try:
+            # We don't have owner_id easily here without a DB lookup, 
+            # but for demo we know it's likely 1. 
+            # To be safe and efficient, we might skip this for every step 
+            # OR do a quick lookup. For now, let's invalidate the demo key.
+            redis_client.delete("documents_list:1")
+        except Exception as e:
+            logger.error(f"Redis delete error: {e}")
+
 def process_document_task(document_id: int):
     """Background task to process a document and extract analysis"""
     start_time = datetime.utcnow()
@@ -368,6 +390,15 @@ def process_document_task(document_id: int):
         )
 
         print(f"Document {document_id} processed successfully")
+        
+        # Invalidate cache so dashboard updates status
+        if redis_client:
+            try:
+                redis_client.delete(f"documents_list:{document['owner_id']}")
+                # Also delete the generic one for demo if used
+                redis_client.delete("documents_list:1")
+            except Exception as e:
+                logger.error(f"Redis delete error: {e}")
     except Exception as e:
         print(f"Error processing document {document_id}: {e}")
         
@@ -405,6 +436,19 @@ def process_document_task(document_id: int):
             conn.close()
         except Exception as update_error:
             print(f"Error updating document status: {update_error}")
+            
+        # Invalidate cache so dashboard updates status
+        if redis_client:
+            try:
+                # Try to get owner_id if possible
+                owner_id = 1
+                if 'document' in locals() and document:
+                    owner_id = document["owner_id"]
+                
+                redis_client.delete(f"documents_list:{owner_id}")
+                redis_client.delete("documents_list:1")
+            except Exception as e:
+                logger.error(f"Redis delete error: {e}")
 
 @app.on_event("startup")
 def startup_event():
@@ -481,6 +525,13 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     )
 
     # Return document info
+    # Invalidate cache
+    if redis_client:
+        try:
+            redis_client.delete("documents_list:1")
+        except Exception as e:
+            logger.error(f"Redis delete error: {e}")
+
     return {
         "id": document_id,
         "filename": file.filename,
@@ -603,6 +654,13 @@ async def upload_document_from_url(
         # 5. Trigger Analysis
         background_tasks.add_task(process_document_task, document_id)
         
+        # Invalidate cache
+        if redis_client:
+            try:
+                redis_client.delete("documents_list:1")
+            except Exception as e:
+                logger.error(f"Redis delete error: {e}")
+
         return {
             "id": db_document["id"],
             "filename": db_document["filename"],
@@ -632,6 +690,19 @@ def dummy_endpoint_for_response_model_definition():
 
 @app.get("/documents")
 def list_documents():
+    # Check Redis cache first
+    # Since we don't have user_id in context yet (demo mode), we'll use a global key or hardcoded user_id=1
+    # In a real app, we would use `documents_list:{user_id}`
+    cache_key = "documents_list:1" 
+    
+    if redis_client:
+        try:
+            cached_docs = redis_client.get(cache_key)
+            if cached_docs:
+                return json.loads(cached_docs)
+        except Exception as e:
+            logger.error(f"Redis error: {e}")
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM documents")
@@ -652,6 +723,17 @@ def list_documents():
             "updated_at": doc["updated_at"]
         })
     
+    # Cache result
+    if redis_client:
+        try:
+            redis_client.setex(
+                cache_key,
+                300,  # 5 minutes TTL
+                json.dumps(result)
+            )
+        except Exception as e:
+            logger.error(f"Redis set error: {e}")
+
     return result
 
 @app.get("/documents/{document_id}")
@@ -714,6 +796,13 @@ def delete_document(document_id: int, background_tasks: BackgroundTasks):
         event_type="document_deleted",
         event_data={"document_id": document_id}
     )
+
+    # Invalidate cache
+    if redis_client:
+        try:
+            redis_client.delete("documents_list:1")
+        except Exception as e:
+            logger.error(f"Redis delete error: {e}")
 
     return {"message": "Document deleted successfully"}
 

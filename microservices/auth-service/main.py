@@ -10,8 +10,19 @@ import hashlib
 import sqlite3
 from passlib.context import CryptContext
 
+import redis
+import json
+
 # Configure password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Redis configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+try:
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    print(f"Failed to connect to Redis: {e}")
+    redis_client = None
 
 # JWT configuration
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
@@ -259,9 +270,39 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(o
     except jwt.PyJWTError:
         raise credentials_exception
 
+    # Check Redis cache first
+    if redis_client:
+        try:
+            cached_user = redis_client.get(f"user:{email}")
+            if cached_user:
+                user_data = json.loads(cached_user)
+                return User(**user_data)
+        except Exception as e:
+            print(f"Redis error: {e}")
+
     user = get_user_by_email(email=token_data.email)
     if user is None:
         raise credentials_exception
+
+    # Cache user data
+    if redis_client:
+        try:
+            # Convert UserInDB to User model for caching (exclude hashed_password)
+            user_to_cache = User(
+                id=user.id,
+                email=user.email,
+                full_name=user.full_name,
+                avatar_url=user.avatar_url,
+                is_active=user.is_active,
+                is_admin=user.is_admin
+            )
+            redis_client.setex(
+                f"user:{email}",
+                900,  # 15 minutes TTL
+                json.dumps(user_to_cache.dict())
+            )
+        except Exception as e:
+            print(f"Redis set error: {e}")
 
     return user
 
@@ -397,6 +438,16 @@ def update_user_me(user_update: UserUpdate, current_user: User = Depends(get_cur
     updated_user = cursor.fetchone()
     conn.close()
     
+    # Invalidate cache
+    if redis_client:
+        try:
+            redis_client.delete(f"user:{current_user.email}")
+            # If email changed, delete old key too (though current_user.email is the old one)
+            if user_update.email and user_update.email != current_user.email:
+                redis_client.delete(f"user:{user_update.email}")
+        except Exception as e:
+            print(f"Redis delete error: {e}")
+
     return UserInDB(
         id=updated_user["id"],
         email=updated_user["email"],

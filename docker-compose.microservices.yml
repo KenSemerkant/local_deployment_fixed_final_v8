@@ -42,10 +42,12 @@ services:
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
       - OTEL_SERVICE_NAME=auth_service
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - auth_data:/data
     depends_on:
       - jaeger
+      - redis
     networks:
       - app-network
     restart: unless-stopped
@@ -69,12 +71,14 @@ services:
       - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
       - OTEL_SERVICE_NAME=document_service
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - document_data:/data
     depends_on:
       - minio
       - llm-service
       - jaeger
+      - redis
     networks:
       - app-network
     restart: unless-stopped

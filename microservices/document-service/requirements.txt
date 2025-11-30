@@ -24,3 +24,4 @@ opentelemetry-instrumentation-requests==0.42b0
 opentelemetry-instrumentation-sqlalchemy==0.42b0
 opentelemetry-instrumentation-logging==0.42b0
 jaeger-client==4.8.0
+redis==5.0.1
