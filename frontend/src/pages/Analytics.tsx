@@ -640,8 +640,8 @@ const Analytics: React.FC = () => {
               <Typography variant="subtitle1" gutterBottom>
                 Operation Performance
               </Typography>
-              <TableContainer>
-                <Table size="small">
+              <TableContainer sx={{ maxHeight: 300, overflowX: 'hidden' }}>
+                <Table stickyHeader size="small">
                   <TableHead>
                     <TableRow>
                       <TableCell>Operation</TableCell>
