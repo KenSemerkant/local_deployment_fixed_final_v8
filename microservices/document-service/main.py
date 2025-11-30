@@ -13,7 +13,8 @@ import logging
 
 import redis
 import json
-from rabbitmq import publish_message
+import json
+from rabbitmq import publish_message, get_queue_depth
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -708,6 +709,48 @@ def dummy_endpoint_for_response_model_definition():
     # The actual /documents endpoint already exists and returns a dict.
     # If the user intends to use DocumentResponse for /documents, that endpoint needs modification.
     pass
+
+@app.get("/queue-status")
+def get_queue_status():
+    """Get current queue status metrics"""
+    # 1. Get Queued count from RabbitMQ
+    queued_count = get_queue_depth()
+    
+    # 2. Get Processing and Completed counts from DB
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Processing count
+    cursor.execute("SELECT COUNT(*) as count FROM documents WHERE status = 'PROCESSING'")
+    processing_count = cursor.fetchone()["count"]
+    
+    # Completed in last 24h
+    cursor.execute("""
+        SELECT COUNT(*) as count 
+        FROM documents 
+        WHERE status = 'COMPLETED' 
+        AND updated_at >= datetime('now', '-1 day')
+    """)
+    completed_24h_count = cursor.fetchone()["count"]
+    
+    # Get recently processed documents (last 5)
+    cursor.execute("""
+        SELECT id, filename, status, updated_at 
+        FROM documents 
+        WHERE status IN ('COMPLETED', 'ERROR')
+        ORDER BY updated_at DESC 
+        LIMIT 5
+    """)
+    recent_docs = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    
+    return {
+        "queued": queued_count,
+        "processing": processing_count,
+        "completed_24h": completed_24h_count,
+        "recent_documents": recent_docs
+    }
 
 @app.get("/documents")
 def list_documents():

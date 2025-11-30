@@ -187,6 +187,10 @@ async def upload_document_from_url(request: Request):
 async def list_documents(request: Request):
     return await forward_request("document", "/documents", request)
 
+@app.get("/documents/queue-status")
+async def get_queue_status(request: Request):
+    return await forward_request("document", "/queue-status", request)
+
 @app.get("/documents/{document_id}")
 async def get_document(document_id: int, request: Request):
     return await forward_request("document", f"/documents/{document_id}", request)

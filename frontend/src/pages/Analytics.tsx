@@ -103,6 +103,18 @@ interface AnalyticsOverview {
   };
 }
 
+interface QueueStatus {
+  queued: number;
+  processing: number;
+  completed_24h: number;
+  recent_documents: Array<{
+    id: number;
+    filename: string;
+    status: string;
+    updated_at: string;
+  }>;
+}
+
 interface UsagePatterns {
   hourly_usage: Array<{ hour: number; events: number }>;
   daily_usage: Array<{ date: string; events: number }>;
@@ -146,6 +158,7 @@ interface UserSatisfaction {
 
 const Analytics: React.FC = () => {
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
   const [usagePatterns, setUsagePatterns] = useState<UsagePatterns | null>(null);
   const [tokenAnalytics, setTokenAnalytics] = useState<TokenAnalytics | null>(null);
   const [performanceAnalytics, setPerformanceAnalytics] = useState<PerformanceAnalytics | null>(null);
@@ -177,13 +190,15 @@ const Analytics: React.FC = () => {
         usagePatternsResponse,
         tokenAnalyticsResponse,
         performanceAnalyticsResponse,
-        userSatisfactionResponse
+        userSatisfactionResponse,
+        queueStatusResponse
       ] = await Promise.all([
         api.get(`/admin/analytics/overview?days=${selectedPeriod}`),
         api.get(`/admin/analytics/usage-patterns?days=${selectedPeriod}`),
         api.get(`/admin/analytics/tokens?days=${selectedPeriod}`),
         api.get(`/admin/analytics/performance?days=${selectedPeriod}`),
-        api.get(`/admin/analytics/satisfaction?days=${selectedPeriod}`)
+        api.get(`/admin/analytics/satisfaction?days=${selectedPeriod}`),
+        api.get('/documents/queue-status')
       ]);
 
       setOverview(overviewResponse.data);
@@ -191,6 +206,7 @@ const Analytics: React.FC = () => {
       setTokenAnalytics(tokenAnalyticsResponse.data);
       setPerformanceAnalytics(performanceAnalyticsResponse.data);
       setUserSatisfaction(userSatisfactionResponse.data);
+      setQueueStatus(queueStatusResponse.data);
 
     } catch (error: any) {
       console.error('Error loading analytics data:', error);
@@ -278,6 +294,72 @@ const Analytics: React.FC = () => {
           </Button>
         </Box>
       </Box>
+
+      {/* Queue Status */}
+      {queueStatus && (
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ bgcolor: 'info.light', color: 'info.contrastText' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>Queued</Typography>
+                <Typography variant="h3">{queueStatus.queued}</Typography>
+                <Typography variant="body2">Waiting for worker</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ bgcolor: 'warning.light', color: 'warning.contrastText' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>Processing</Typography>
+                <Typography variant="h3">{queueStatus.processing}</Typography>
+                <Typography variant="body2">Currently active</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ bgcolor: 'success.light', color: 'success.contrastText' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>Completed (24h)</Typography>
+                <Typography variant="h3">{queueStatus.completed_24h}</Typography>
+                <Typography variant="body2">Successfully processed</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Recent Documents List */}
+          <Grid item xs={12}>
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="subtitle1" gutterBottom>Recently Processed Documents</Typography>
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Filename</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell align="right">Updated At</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {queueStatus.recent_documents.map((doc) => (
+                      <TableRow key={doc.id}>
+                        <TableCell>{doc.filename}</TableCell>
+                        <TableCell>
+                          <Chip
+                            label={doc.status}
+                            size="small"
+                            color={doc.status === 'COMPLETED' ? 'success' : doc.status === 'ERROR' ? 'error' : 'default'}
+                          />
+                        </TableCell>
+                        <TableCell align="right">{new Date(doc.updated_at).toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          </Grid>
+        </Grid>
+      )}
 
       {/* Overview Cards */}
       {overview && (

@@ -55,3 +55,22 @@ def publish_message(message: dict):
         if connection:
             connection.close()
         return False
+
+def get_queue_depth():
+    """Get the number of messages in the queue"""
+    connection = get_rabbitmq_connection()
+    if not connection:
+        return 0
+    
+    try:
+        channel = connection.channel()
+        # Passive declare returns queue state without modifying it
+        queue = channel.queue_declare(queue=QUEUE_NAME, passive=True)
+        message_count = queue.method.message_count
+        connection.close()
+        return message_count
+    except Exception as e:
+        logger.error(f"Error getting queue depth: {e}")
+        if connection:
+            connection.close()
+        return 0
