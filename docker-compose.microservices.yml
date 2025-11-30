@@ -72,6 +72,7 @@ services:
       - OTEL_SERVICE_NAME=document_service
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
       - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_HOST=rabbitmq
     volumes:
       - document_data:/data
     depends_on:
@@ -79,6 +80,7 @@ services:
       - llm-service
       - jaeger
       - redis
+      - rabbitmq
     networks:
       - app-network
     restart: unless-stopped
@@ -119,6 +121,52 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # RabbitMQ Service
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Document Worker Service
+  document-worker:
+    build:
+      context: ./microservices/document-service
+      dockerfile: Dockerfile
+    command: python worker.py
+    environment:
+      - DATABASE_URL=sqlite:////data/db/documents.db
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SECURE=false
+      - DOCUMENTS_BUCKET=documents
+      - STORAGE_PATH=/data
+      - LLM_SERVICE_URL=http://llm-service:8003
+      - ANALYTICS_SERVICE_URL=http://analytics-service:8000
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://jaeger:4318/v1/traces
+      - OTEL_SERVICE_NAME=document_worker
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-secure-internal-key-change-in-production}
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_HOST=rabbitmq
+    volumes:
+      - document_data:/data
+    depends_on:
+      - minio
+      - llm-service
+      - jaeger
+      - redis
+      - rabbitmq
     networks:
       - app-network
     restart: unless-stopped

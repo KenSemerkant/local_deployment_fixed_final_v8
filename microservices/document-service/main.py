@@ -13,6 +13,7 @@ import logging
 
 import redis
 import json
+from rabbitmq import publish_message
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -180,7 +181,9 @@ class UpdateStepRequest(BaseModel):
 
 def get_db_connection():
     """Create a database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
+    # Ensure DATABASE_PATH is available
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row  # Enable column access by name
     return conn
 
@@ -509,8 +512,20 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     conn.commit()
     conn.close()
 
-    # Process document in background
-    background_tasks.add_task(process_document_task, document_id)
+    # Process document via RabbitMQ
+    message = {"document_id": document_id, "action": "process_document"}
+    if publish_message(message):
+        logger.info(f"Queued document {document_id} for processing")
+        # Update step to indicate queued status
+        # We can't use update_document_step here easily without circular imports or code duplication
+        # But the default status is PROCESSING, which is fine.
+    else:
+        logger.error(f"Failed to queue document {document_id}")
+        # Fallback to background task if RabbitMQ fails? 
+        # For now, let's keep it simple and just log error, or maybe fallback.
+        # Let's fallback to background task for robustness during migration
+        logger.warning("Falling back to local background task")
+        background_tasks.add_task(process_document_task, document_id)
 
     # Track upload event
     background_tasks.add_task(
@@ -651,8 +666,14 @@ async def upload_document_from_url(
         db_document = cursor.fetchone()
         conn.close()
 
-        # 5. Trigger Analysis
-        background_tasks.add_task(process_document_task, document_id)
+        # 5. Trigger Analysis via RabbitMQ
+        message = {"document_id": document_id, "action": "process_document"}
+        if publish_message(message):
+            logger.info(f"Queued document {document_id} for processing")
+        else:
+            logger.error(f"Failed to queue document {document_id}")
+            logger.warning("Falling back to local background task")
+            background_tasks.add_task(process_document_task, document_id)
         
         # Invalidate cache
         if redis_client:
