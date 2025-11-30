@@ -807,14 +807,17 @@ def list_documents():
 def get_document(document_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
+    cursor.execute("SELECT * FROM documents WHERE id = %s", (document_id,))
     document = cursor.fetchone()
+    # Fetch analysis result if available
+    cursor.execute("SELECT * FROM analysis_results WHERE document_id = %s", (document_id,))
+    analysis = cursor.fetchone()
     conn.close()
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    return {
+    response = {
         "id": document["id"],
         "filename": document["filename"],
         "file_path": document["file_path"],
@@ -828,13 +831,21 @@ def get_document(document_id: int):
         "updated_at": document["updated_at"]
     }
 
+    if analysis:
+        response["analysis_results"] = {
+            "summary": analysis["summary"],
+            "key_figures": analysis["key_figures"]
+        }
+    
+    return response
+
 @app.delete("/documents/{document_id}")
 def delete_document(document_id: int, background_tasks: BackgroundTasks):
     conn = get_db_connection()
     cursor = conn.cursor()
 
     # Get file path (which is now the MinIO object name) to delete the actual file
-    cursor.execute("SELECT file_path FROM documents WHERE id = ?", (document_id,))
+    cursor.execute("SELECT file_path FROM documents WHERE id = %s", (document_id,))
     result = cursor.fetchone()
 
     if not result:
@@ -843,7 +854,7 @@ def delete_document(document_id: int, background_tasks: BackgroundTasks):
     minio_object_name = result["file_path"]
 
     # Delete from database
-    cursor.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+    cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
     conn.commit()
     conn.close()
 
